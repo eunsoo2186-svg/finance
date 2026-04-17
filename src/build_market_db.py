@@ -25,6 +25,7 @@ LOGGER = logging.getLogger(__name__)
 NASDAQ_LISTED_URL = "https://www.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.txt"
 OTHER_LISTED_URL = "https://www.nasdaqtrader.com/dynamic/SymDir/otherlisted.txt"
 OTHER_LISTED_ACT_SYMBOL_COLUMN = "ACT Symbol"
+DEFAULT_UNKNOWN = "Unknown"
 
 
 def _non_negative_float(raw: str) -> float:
@@ -68,8 +69,8 @@ def _load_nasdaq_rows() -> List[Dict[str, str]]:
                 "company_name_ko": "",
                 "company_name_en": str(row.get("Security Name") or ticker).strip(),
                 "exchange": "NASDAQ",
-                "sector": "Unknown",
-                "sub_sector": "Unknown",
+                "sector": DEFAULT_UNKNOWN,
+                "sub_sector": DEFAULT_UNKNOWN,
             }
         )
     return out
@@ -92,8 +93,8 @@ def _load_nyse_rows() -> List[Dict[str, str]]:
                 "company_name_ko": "",
                 "company_name_en": str(row.get("Security Name") or ticker).strip(),
                 "exchange": "NYSE",
-                "sector": "Unknown",
-                "sub_sector": "Unknown",
+                "sector": DEFAULT_UNKNOWN,
+                "sub_sector": DEFAULT_UNKNOWN,
             }
         )
     return out
@@ -131,8 +132,8 @@ def _load_krx_rows(market: str) -> List[Dict[str, str]]:
                 "company_name_ko": str(name).strip(),
                 "company_name_en": "",
                 "exchange": market.upper(),
-                "sector": "Unknown",
-                "sub_sector": "Unknown",
+                "sector": DEFAULT_UNKNOWN,
+                "sub_sector": DEFAULT_UNKNOWN,
             }
         )
     return out
@@ -153,8 +154,8 @@ def _load_watchlist_rows() -> List[Dict[str, str]]:
                 "company_name_ko": str(row.get("company_name_ko") or "").strip(),
                 "company_name_en": str(row.get("company_name_en") or row.get("company_name") or ticker).strip(),
                 "exchange": exchange or "UNKNOWN",
-                "sector": str(row.get("sector") or "Unknown").strip() or "Unknown",
-                "sub_sector": str(row.get("sub_sector") or "Unknown").strip() or "Unknown",
+                "sector": str(row.get("sector") or DEFAULT_UNKNOWN).strip() or DEFAULT_UNKNOWN,
+                "sub_sector": str(row.get("sub_sector") or DEFAULT_UNKNOWN).strip() or DEFAULT_UNKNOWN,
             }
         )
     return out
@@ -215,7 +216,7 @@ def build_market_db(output_path: Path, enrich_sectors: bool, delay_seconds: floa
         for key in ("company_name_ko", "company_name_en", "exchange", "sector", "sub_sector"):
             existing = str(current.get(key, "") or "").strip()
             incoming = str(row.get(key, "") or "").strip()
-            if not existing or existing in {"Unknown", "UNKNOWN"}:
+            if not existing or existing.upper() == DEFAULT_UNKNOWN.upper():
                 if incoming:
                     current[key] = incoming
 
