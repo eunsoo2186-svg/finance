@@ -1,18 +1,20 @@
 from __future__ import annotations
 
-import os
 import logging
+import os
 from dataclasses import dataclass
 from functools import lru_cache
+from json import JSONDecodeError
 from pathlib import Path
 from typing import Dict, Iterable, List, Tuple
-from json import JSONDecodeError
 
 import pandas as pd
 import requests
 import yfinance as yf
 from dotenv import load_dotenv
 
+from stock_metadata import DEFAULT_SECTOR_HIERARCHY, metadata_for_ticker
+from watchlist_manager import load_watchlist_tickers
 
 ENV_PATH = Path(__file__).resolve().parents[1] / "config" / ".env"
 load_dotenv(ENV_PATH)
@@ -20,11 +22,15 @@ LOGGER = logging.getLogger(__name__)
 
 AI_TICKERS = ["MSFT", "NVDA", "GOOGL", "TSLA"]
 SPACE_TICKERS = ["RTX", "LMT", "NOC", "BA"]
+MARKET_TICKERS = load_watchlist_tickers()
 
 SECTOR_TICKERS = {
     "AI": AI_TICKERS,
     "SPACE": SPACE_TICKERS,
+    "MARKET": MARKET_TICKERS,
 }
+
+SECTOR_HIERARCHY = DEFAULT_SECTOR_HIERARCHY
 
 
 @dataclass(frozen=True)
@@ -39,34 +45,39 @@ class MetricSpec:
 
 METRIC_SPECS: Dict[str, Dict[str, MetricSpec]] = {
     "AI": {
-        "pe_ratio": MetricSpec("P/E Ratio", 8, 60, False, "yfinance.info.trailingPE", "trailingPE"),
-        "peg_ratio": MetricSpec("PEG Ratio", 0.3, 3.0, False, "yfinance.info.pegRatio", "pegRatio"),
+        "pe_ratio": MetricSpec("P/E Ratio / 주가수익비율", 8, 60, False, "yfinance.info.trailingPE", "trailingPE"),
+        "peg_ratio": MetricSpec("PEG Ratio / PEG 비율", 0.3, 3.0, False, "yfinance.info.pegRatio", "pegRatio"),
         "revenue_growth_yoy": MetricSpec(
-            "YoY Revenue Growth", -0.2, 0.5, True, "yfinance.info.revenueGrowth", "revenueGrowth"
+            "YoY Revenue Growth / 매출성장률", -0.2, 0.5, True, "yfinance.info.revenueGrowth", "revenueGrowth"
         ),
         "rd_ratio": MetricSpec(
-            "R&D / Revenue", 0.02, 0.35, True, "yfinance.financials + info.totalRevenue", "researchDevelopment / totalRevenue"
+            "R&D / Revenue / 연구개발비율",
+            0.02,
+            0.35,
+            True,
+            "yfinance.financials + info.totalRevenue",
+            "researchDevelopment / totalRevenue",
         ),
         "asset_turnover": MetricSpec(
-            "Asset Turnover", 0.1, 1.5, True, "yfinance.info.totalRevenue,totalAssets", "totalRevenue / totalAssets"
+            "Asset Turnover / 자산회전율", 0.1, 1.5, True, "yfinance.info.totalRevenue,totalAssets", "totalRevenue / totalAssets"
         ),
         "tech_cycle": MetricSpec(
-            "Tech Cycle Position", -0.4, 0.8, True, "finnhub.stock.metric.52WeekPriceReturnDaily", "52WeekPriceReturnDaily"
+            "Tech Cycle Position / 기술사이클", -0.4, 0.8, True, "finnhub.stock.metric.52WeekPriceReturnDaily", "52WeekPriceReturnDaily"
         ),
     },
     "SPACE": {
-        "pb_ratio": MetricSpec("P/B Ratio", 0.5, 8.0, False, "yfinance.info.priceToBook", "priceToBook"),
+        "pb_ratio": MetricSpec("P/B Ratio / 주가순자산비율", 0.5, 8.0, False, "yfinance.info.priceToBook", "priceToBook"),
         "operating_margin": MetricSpec(
-            "Operating Margin", -0.1, 0.3, True, "yfinance.info.operatingMargins", "operatingMargins"
+            "Operating Margin / 영업이익률", -0.1, 0.3, True, "yfinance.info.operatingMargins", "operatingMargins"
         ),
         "debt_ratio": MetricSpec(
-            "Debt Ratio", 0.1, 3.0, False, "yfinance.info.debtToEquity", "debtToEquity / 100"
+            "Debt Ratio / 부채비율", 0.1, 3.0, False, "yfinance.info.debtToEquity", "debtToEquity / 100"
         ),
         "dividend_yield": MetricSpec(
-            "Dividend Yield", 0.0, 0.08, True, "yfinance.info.dividendYield", "dividendYield"
+            "Dividend Yield / 배당수익률", 0.0, 0.08, True, "yfinance.info.dividendYield", "dividendYield"
         ),
         "backlog_proxy": MetricSpec(
-            "Contract Pipeline (Proxy)",
+            "Contract Pipeline (Proxy) / 수주모멘텀",
             -0.2,
             0.5,
             True,
@@ -74,7 +85,25 @@ METRIC_SPECS: Dict[str, Dict[str, MetricSpec]] = {
             "(sum of recent 4 quarters revenue / sum of previous 4 quarters revenue) - 1",
         ),
         "gov_cycle": MetricSpec(
-            "Gov Spending Cycle (Proxy)", -0.3, 0.4, True, "finnhub.stock.metric.52WeekPriceReturnDaily", "52WeekPriceReturnDaily"
+            "Gov Spending Cycle (Proxy) / 정책사이클", -0.3, 0.4, True, "finnhub.stock.metric.52WeekPriceReturnDaily", "52WeekPriceReturnDaily"
+        ),
+    },
+    "MARKET": {
+        "pe_ratio": MetricSpec("P/E Ratio / 주가수익비율", 8, 60, False, "yfinance.info.trailingPE", "trailingPE"),
+        "revenue_growth_yoy": MetricSpec(
+            "YoY Revenue Growth / 매출성장률", -0.2, 0.5, True, "yfinance.info.revenueGrowth", "revenueGrowth"
+        ),
+        "asset_turnover": MetricSpec(
+            "Asset Turnover / 자산회전율", 0.1, 1.5, True, "yfinance.info.totalRevenue,totalAssets", "totalRevenue / totalAssets"
+        ),
+        "debt_ratio": MetricSpec(
+            "Debt Ratio / 부채비율", 0.1, 3.0, False, "yfinance.info.debtToEquity", "debtToEquity / 100"
+        ),
+        "dividend_yield": MetricSpec(
+            "Dividend Yield / 배당수익률", 0.0, 0.08, True, "yfinance.info.dividendYield", "dividendYield"
+        ),
+        "tech_cycle": MetricSpec(
+            "Tech Cycle Position / 기술사이클", -0.4, 0.8, True, "finnhub.stock.metric.52WeekPriceReturnDaily", "52WeekPriceReturnDaily"
         ),
     },
 }
@@ -95,6 +124,14 @@ DEFAULT_WEIGHTS: Dict[str, Dict[str, float]] = {
         "dividend_yield": 0.14,
         "backlog_proxy": 0.18,
         "gov_cycle": 0.10,
+    },
+    "MARKET": {
+        "pe_ratio": 0.20,
+        "revenue_growth_yoy": 0.22,
+        "asset_turnover": 0.18,
+        "debt_ratio": 0.15,
+        "dividend_yield": 0.10,
+        "tech_cycle": 0.15,
     },
 }
 
@@ -119,6 +156,20 @@ def _finnhub_metrics(symbol: str) -> Dict[str, float]:
         return {}
 
 
+@lru_cache(maxsize=256)
+def _ticker_info(symbol: str) -> Dict[str, object]:
+    try:
+        info = yf.Ticker(symbol).info or {}
+        return info if isinstance(info, dict) else {}
+    except Exception:
+        return {}
+
+
+@lru_cache(maxsize=256)
+def _ticker_object(symbol: str) -> yf.Ticker:
+    return yf.Ticker(symbol)
+
+
 def _safe_number(value, scale: float = 1.0) -> float | None:
     if value is None:
         return None
@@ -131,12 +182,43 @@ def _safe_number(value, scale: float = 1.0) -> float | None:
     return val * scale
 
 
+def _extract_latest_numeric(frame: pd.DataFrame, candidates: List[str]) -> float | None:
+    if frame is None or frame.empty:
+        return None
+    for row_name in candidates:
+        if row_name in frame.index:
+            series = pd.to_numeric(frame.loc[row_name], errors="coerce").dropna()
+            if not series.empty:
+                return _safe_number(series.iloc[0])
+    return None
+
+
+def _fallback_total_revenue(ticker: yf.Ticker) -> float | None:
+    try:
+        return _extract_latest_numeric(
+            ticker.income_stmt,
+            ["Total Revenue", "Operating Revenue", "Revenue"],
+        )
+    except Exception:
+        return None
+
+
+def _fallback_total_assets(ticker: yf.Ticker) -> float | None:
+    try:
+        return _extract_latest_numeric(
+            ticker.balance_sheet,
+            ["Total Assets"],
+        )
+    except Exception:
+        return None
+
+
 def _quarterly_revenue_growth(ticker: yf.Ticker) -> float | None:
     try:
         q_stmt = ticker.quarterly_income_stmt
         if q_stmt is None or q_stmt.empty or "Total Revenue" not in q_stmt.index:
             return None
-        revenues = q_stmt.loc["Total Revenue"].dropna()
+        revenues = pd.to_numeric(q_stmt.loc["Total Revenue"], errors="coerce").dropna()
         if len(revenues) < 8:
             return None
         recent = float(revenues.iloc[:4].sum())
@@ -150,10 +232,13 @@ def _quarterly_revenue_growth(ticker: yf.Ticker) -> float | None:
 
 def get_sector(symbol: str) -> str:
     symbol = symbol.upper()
-    for sector, members in SECTOR_TICKERS.items():
-        if symbol in members:
-            return sector
-    return "CUSTOM"
+    if symbol in AI_TICKERS:
+        return "AI"
+    if symbol in SPACE_TICKERS:
+        return "SPACE"
+    meta = metadata_for_ticker(symbol, _ticker_info(symbol))
+    inferred = meta.get("sector", "MARKET")
+    return inferred if inferred in METRIC_SPECS else "MARKET"
 
 
 def normalize_metric(value: float | None, spec: MetricSpec) -> float:
@@ -174,23 +259,20 @@ def normalize_metric(value: float | None, spec: MetricSpec) -> float:
 
 def stock_metrics(symbol: str, sector: str) -> Dict[str, float | None]:
     symbol = symbol.upper()
-    ticker = yf.Ticker(symbol)
-    try:
-        info = ticker.info or {}
-    except Exception:
-        info = {}
+    ticker = _ticker_object(symbol)
+    info = _ticker_info(symbol)
     finnhub = _finnhub_metrics(symbol)
 
-    total_revenue = _safe_number(info.get("totalRevenue"))
-    total_assets = _safe_number(info.get("totalAssets"))
+    total_revenue = _safe_number(info.get("totalRevenue")) or _fallback_total_revenue(ticker)
+    total_assets = _safe_number(info.get("totalAssets")) or _fallback_total_assets(ticker)
     rd_expense = _safe_number(info.get("researchDevelopment"))
 
     rd_ratio = None
-    if rd_expense is not None and total_revenue and total_revenue != 0:
+    if rd_expense is not None and total_revenue is not None and total_revenue != 0:
         rd_ratio = rd_expense / total_revenue
 
     asset_turnover = None
-    if total_revenue is not None and total_assets and total_assets != 0:
+    if total_revenue is not None and total_assets is not None and total_assets != 0:
         asset_turnover = total_revenue / total_assets
 
     if sector == "AI":
@@ -203,13 +285,23 @@ def stock_metrics(symbol: str, sector: str) -> Dict[str, float | None]:
             "tech_cycle": _safe_number(finnhub.get("52WeekPriceReturnDaily"), 0.01),
         }
 
+    if sector == "SPACE":
+        return {
+            "pb_ratio": _safe_number(info.get("priceToBook")),
+            "operating_margin": _safe_number(info.get("operatingMargins")),
+            "debt_ratio": _safe_number(info.get("debtToEquity"), 0.01),
+            "dividend_yield": _safe_number(info.get("dividendYield")),
+            "backlog_proxy": _quarterly_revenue_growth(ticker),
+            "gov_cycle": _safe_number(finnhub.get("52WeekPriceReturnDaily"), 0.01),
+        }
+
     return {
-        "pb_ratio": _safe_number(info.get("priceToBook")),
-        "operating_margin": _safe_number(info.get("operatingMargins")),
+        "pe_ratio": _safe_number(info.get("trailingPE")),
+        "revenue_growth_yoy": _safe_number(info.get("revenueGrowth")),
+        "asset_turnover": asset_turnover,
         "debt_ratio": _safe_number(info.get("debtToEquity"), 0.01),
         "dividend_yield": _safe_number(info.get("dividendYield")),
-        "backlog_proxy": _quarterly_revenue_growth(ticker),
-        "gov_cycle": _safe_number(finnhub.get("52WeekPriceReturnDaily"), 0.01),
+        "tech_cycle": _safe_number(finnhub.get("52WeekPriceReturnDaily"), 0.01),
     }
 
 
@@ -250,20 +342,23 @@ def build_portfolio_dataframe(symbols: Iterable[str], weight_overrides: Dict[str
 
     for symbol in sorted({s.strip().upper() for s in symbols if s and s.strip()}):
         sector = get_sector(symbol)
-        if sector not in {"AI", "SPACE"}:
-            continue
         metrics = stock_metrics(symbol, sector)
         weights = weight_overrides.get(sector, DEFAULT_WEIGHTS[sector])
         score, normalized = score_stock(metrics, sector, weights)
+        meta = metadata_for_ticker(symbol, _ticker_info(symbol))
 
         row: Dict[str, object] = {
             "ticker": symbol,
+            "company_name": meta.get("company_name", symbol),
+            "ticker_display": f"{symbol} - {meta.get('company_name', symbol)}",
             "sector": sector,
+            "sub_sector": meta.get("sub_sector", "기타"),
+            "market": meta.get("market", "UNKNOWN"),
             "score": score,
             "signal": signal_from_score(score),
         }
         for key, value in metrics.items():
-            row[key] = value
+            row[key] = value if value is not None else pd.NA
             row[f"{key}_normalized"] = normalized.get(key)
         rows.append(row)
 
