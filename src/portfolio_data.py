@@ -14,7 +14,7 @@ import yfinance as yf
 from dotenv import load_dotenv
 from pandas.errors import EmptyDataError, ParserError
 
-from stock_metadata import DEFAULT_SECTOR_HIERARCHY, metadata_for_ticker
+from stock_metadata import DEFAULT_SECTOR_HIERARCHY, STOCK_METADATA, metadata_for_ticker
 from watchlist_manager import load_watchlist, load_watchlist_tickers
 
 ENV_PATH = Path(__file__).resolve().parents[1] / "config" / ".env"
@@ -365,6 +365,26 @@ def get_sector(symbol: str) -> str:
     return inferred if inferred in METRIC_SPECS else "MARKET"
 
 
+def get_sector_info(symbol: str) -> Tuple[str, str]:
+    """Get sector/sub-sector for display using metadata first, then yfinance fallback."""
+    symbol_upper = symbol.upper()
+    if symbol_upper in STOCK_METADATA:
+        meta = STOCK_METADATA[symbol_upper]
+        return str(meta.get("sector", "Unknown")), str(meta.get("sub_sector", "Unknown"))
+
+    meta = metadata_for_ticker(symbol_upper, _ticker_info(symbol_upper))
+    sector = str(meta.get("sector") or "")
+    sub_sector = str(meta.get("sub_sector") or "")
+    if sector:
+        return sector, sub_sector or "Unknown"
+
+    try:
+        info = _ticker_info(symbol_upper)
+        return str(info.get("sector") or "Unknown"), str(info.get("industry") or "Unknown")
+    except Exception:
+        return "Unknown", "Unknown"
+
+
 def normalize_metric(value: float | None, spec: MetricSpec) -> float:
     """Normalize a raw metric into [0, 1] using sector metric bounds.
 
@@ -473,12 +493,14 @@ def signal_from_score(score: float) -> str:
 def build_portfolio_dataframe(symbols: Iterable[str], weight_overrides: Dict[str, Dict[str, float]] | None = None) -> pd.DataFrame:
     rows: List[Dict[str, object]] = []
     weight_overrides = weight_overrides or {}
+    all_metric_keys = sorted({metric for specs in METRIC_SPECS.values() for metric in specs.keys()})
 
     for symbol in sorted({s.strip().upper() for s in symbols if s and s.strip()}):
-        sector = get_sector(symbol)
-        metrics = stock_metrics(symbol, sector)
-        weights = weight_overrides.get(sector, DEFAULT_WEIGHTS[sector])
-        score, normalized = score_stock(metrics, sector, weights)
+        score_sector = get_sector(symbol)
+        display_sector, display_sub_sector = get_sector_info(symbol)
+        metrics = stock_metrics(symbol, score_sector)
+        weights = weight_overrides.get(score_sector, DEFAULT_WEIGHTS[score_sector])
+        score, normalized = score_stock(metrics, score_sector, weights)
         meta = metadata_for_ticker(symbol, _ticker_info(symbol))
 
         row: Dict[str, object] = {
@@ -487,15 +509,17 @@ def build_portfolio_dataframe(symbols: Iterable[str], weight_overrides: Dict[str
             "company_name_ko": meta.get("company_name_ko", ""),
             "company_name_en": meta.get("company_name_en", meta.get("company_name", symbol)),
             "ticker_display": symbol,
-            "sector": sector,
-            "sub_sector": meta.get("sub_sector", "General"),
+            "sector": display_sector,
+            "sub_sector": display_sub_sector or meta.get("sub_sector", "General"),
             "market": meta.get("market", "UNKNOWN"),
             "score": score,
             "signal": signal_from_score(score),
         }
-        for key, value in metrics.items():
+        for key in all_metric_keys:
+            value = metrics.get(key)
             row[key] = value if value is not None else pd.NA
-            row[f"{key}_normalized"] = normalized.get(key)
+            row[f"{key}_normalized"] = normalized.get(key, pd.NA)
+        row["current_price"] = metrics.get("current_price", pd.NA)
         rows.append(row)
 
     frame = pd.DataFrame(rows)

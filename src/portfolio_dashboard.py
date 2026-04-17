@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import os
+
 import pandas as pd
 import plotly.express as px
 import streamlit as st
 
 from ai_analysis import blended_signal_score, recommendation_from_score
-from news_aggregator import extract_keywords, recent_news
+from news_aggregator import NewsAggregator, extract_keywords, recent_news
 from portfolio_data import DEFAULT_WEIGHTS, METRIC_SPECS, build_portfolio_dataframe, load_all_tickers, metric_basis_table
 from watchlist_manager import load_favorites, load_holdings, load_notes, load_watchlist_tickers, save_favorites, save_holdings, save_notes
 
@@ -29,6 +31,40 @@ def _display_name(row: pd.Series) -> str:
     return ko or en
 
 
+def _display_name_ko(row: pd.Series) -> str:
+    ko = str(row.get("company_name_ko") or "").strip()
+    return ko or _display_name(row)
+
+
+def _row_background_style(row: pd.Series) -> list[str]:
+    color = "background-color: #eaf3ff;" if row.get("보유여부") == "보유" else ""
+    return [color] * len(row)
+
+
+def _return_style(value: object) -> str:
+    if value is None or pd.isna(value):
+        return ""
+    try:
+        val = float(value)
+    except (TypeError, ValueError):
+        return ""
+    if val > 0:
+        return "color: #d32f2f; font-weight: 600;"
+    if val < 0:
+        return "color: #2e7d32; font-weight: 600;"
+    return ""
+
+
+def _format_news_datetime(value: object) -> str:
+    try:
+        ts = int(value or 0)
+    except (TypeError, ValueError):
+        return ""
+    if ts <= 0:
+        return ""
+    return pd.to_datetime(ts, unit="s", utc=True).strftime("%Y-%m-%d")
+
+
 METRIC_HELP = {
     "P/E Ratio": "주가를 주당순이익으로 나눈 값. 낮을수록 밸류에이션 부담이 낮습니다.",
     "PEG Ratio": "P/E를 이익 성장률로 나눈 값. 1에 가까울수록 성장 대비 가격이 균형적입니다.",
@@ -45,6 +81,7 @@ METRIC_HELP = {
 }
 # Cap API calls per refresh while still surfacing a representative notable-news sample.
 NEWS_SCAN_LIMIT = 20
+news_agg = NewsAggregator(os.getenv("FINNHUB_API_KEY", ""))
 
 
 def _average_return_for_held(frame: pd.DataFrame, holdings_payload: dict) -> str:
@@ -179,43 +216,117 @@ st.subheader("보유/미보유 통합 테이블")
 table_df = portfolio.copy()
 held_set = set(holdings_data.keys())
 table_df["보유여부"] = table_df["ticker"].apply(lambda t: "보유" if t in held_set else "미보유")
-table_df["종목명"] = table_df.apply(_display_name, axis=1)
+table_df["종목명(한글)"] = table_df.apply(_display_name_ko, axis=1)
 table_df["매입가"] = table_df["ticker"].apply(lambda t: float(holdings_data.get(t, {}).get("purchase_price", 0) or 0) if t in held_set else pd.NA)
 table_df["보유수량"] = table_df["ticker"].apply(lambda t: float(holdings_data.get(t, {}).get("quantity", 0) or 0) if t in held_set else pd.NA)
-table_df["통화"] = table_df["ticker"].apply(lambda t: holdings_data.get(t, {}).get("currency", "") if t in held_set else "")
-table_df["목표가"] = table_df["ticker"].apply(lambda t: float(holdings_data.get(t, {}).get("target_price", 0) or 0) if t in held_set else pd.NA)
 table_df["현재가"] = pd.to_numeric(table_df["current_price"], errors="coerce")
 table_df["수익률(%)"] = ((table_df["현재가"] - table_df["매입가"]) / table_df["매입가"].replace(0, pd.NA)) * 100
 table_df["메모"] = table_df["ticker"].apply(lambda t: str(notes_data.get(t, "")))
 table_df["신호"] = table_df.apply(lambda r: recommendation_from_score(float(r["score"]), held=r["ticker"] in held_set), axis=1)
+table_df.rename(columns={"ticker": "TICKER", "score": "스코어", "sector": "섹터", "sub_sector": "소섹터"}, inplace=True)
 
-editor_columns = [
+metric_columns = {
+    "pe_ratio": "P/E",
+    "peg_ratio": "PEG",
+    "revenue_growth_yoy": "Revenue Growth",
+    "rd_ratio": "R&D Ratio",
+    "asset_turnover": "Asset Turnover",
+    "tech_cycle": "Tech Cycle",
+    "pb_ratio": "P/B",
+    "operating_margin": "Operating Margin",
+    "debt_ratio": "Debt Ratio",
+    "dividend_yield": "Dividend Yield",
+    "backlog_proxy": "Backlog Proxy",
+    "gov_cycle": "Gov Cycle",
+}
+table_df.rename(columns=metric_columns, inplace=True)
+
+unified_columns = [
     "보유여부",
-    "종목명",
-    "ticker",
+    "종목명(한글)",
+    "TICKER",
+    "섹터",
+    "소섹터",
     "매입가",
     "보유수량",
     "현재가",
     "수익률(%)",
-    "통화",
-    "목표가",
     "메모",
-    "score",
+    "스코어",
+    "P/E",
+    "PEG",
+    "Revenue Growth",
+    "R&D Ratio",
+    "Asset Turnover",
+    "Tech Cycle",
+    "P/B",
+    "Operating Margin",
+    "Debt Ratio",
+    "Dividend Yield",
+    "Backlog Proxy",
+    "Gov Cycle",
     "신호",
 ]
-editor_df = table_df[editor_columns].rename(columns={"ticker": "TICKER", "score": "스코어"}).copy()
-for col in ["매입가", "보유수량", "현재가", "수익률(%)", "목표가", "스코어"]:
-    editor_df[col] = editor_df[col].apply(_format_number)
+for col in unified_columns:
+    if col not in table_df.columns:
+        table_df[col] = pd.NA
 
-edited_table = st.data_editor(
-    editor_df,
-    width="stretch",
-    hide_index=True,
-    disabled=["보유여부", "종목명", "TICKER", "매입가", "보유수량", "현재가", "수익률(%)", "통화", "목표가", "스코어", "신호"],
-)
+non_numeric_unified_columns = {"보유여부", "종목명(한글)", "TICKER", "섹터", "소섹터", "메모", "신호"}
+column_config = {
+    "P/E": st.column_config.NumberColumn(help="주가수익비율"),
+    "PEG": st.column_config.NumberColumn(help="P/E 대비 성장률 보정 지표"),
+    "Revenue Growth": st.column_config.NumberColumn(help="전년 동기 대비 매출 성장률"),
+    "R&D Ratio": st.column_config.NumberColumn(help="매출 대비 연구개발비 비율"),
+    "Asset Turnover": st.column_config.NumberColumn(help="총자산 대비 매출 효율"),
+    "Tech Cycle": st.column_config.NumberColumn(help="52주 수익률 기반 기술 사이클"),
+    "P/B": st.column_config.NumberColumn(help="주가순자산비율"),
+    "Operating Margin": st.column_config.NumberColumn(help="영업이익률"),
+    "Debt Ratio": st.column_config.NumberColumn(help="부채비율"),
+    "Dividend Yield": st.column_config.NumberColumn(help="배당수익률"),
+    "Backlog Proxy": st.column_config.NumberColumn(help="수주/파이프라인 대체지표"),
+    "Gov Cycle": st.column_config.NumberColumn(help="정부 지출 사이클 민감도"),
+}
+try:
+    styled_unified = (
+        table_df[unified_columns]
+        .style.apply(_row_background_style, axis=1)
+        .applymap(_return_style, subset=["수익률(%)"])
+        .format(
+            {
+                "매입가": "{:.2f}",
+                "보유수량": "{:.2f}",
+                "현재가": "{:.2f}",
+                "수익률(%)": "{:.2f}",
+                "스코어": "{:.2f}",
+                "P/E": "{:.2f}",
+                "PEG": "{:.2f}",
+                "Revenue Growth": "{:.2f}",
+                "R&D Ratio": "{:.2f}",
+                "Asset Turnover": "{:.2f}",
+                "Tech Cycle": "{:.2f}",
+                "P/B": "{:.2f}",
+                "Operating Margin": "{:.2f}",
+                "Debt Ratio": "{:.2f}",
+                "Dividend Yield": "{:.2f}",
+                "Backlog Proxy": "{:.2f}",
+                "Gov Cycle": "{:.2f}",
+            },
+            na_rep="-",
+        )
+    )
+    st.dataframe(styled_unified, use_container_width=True, hide_index=True, column_config=column_config)
+except AttributeError:
+    fallback_df = table_df[unified_columns].copy()
+    for c in fallback_df.columns:
+        if c not in non_numeric_unified_columns:
+            fallback_df[c] = fallback_df[c].apply(_format_number)
+    st.dataframe(fallback_df.fillna("-"), use_container_width=True, hide_index=True)
+
+selected_ticker_for_note = st.selectbox("메모 수정 종목", portfolio["ticker"].tolist(), format_func=lambda t: ticker_label_map.get(t, t))
+note_value = st.text_input("메모", value=str(notes_data.get(selected_ticker_for_note, "")))
 if st.button("메모 저장"):
-    updated_notes = {str(row["TICKER"]).upper(): str(row["메모"]) for _, row in edited_table.iterrows()}
-    save_notes(updated_notes)
+    notes_data[selected_ticker_for_note] = note_value
+    save_notes(notes_data)
     st.success("메모를 저장했습니다.")
 
 st.subheader("재무 지표 테이블")
@@ -268,29 +379,35 @@ non_numeric_columns = {"company_name_en", "ticker", "market", "sector", "sub_sec
 for c in display_df.columns:
     if c not in non_numeric_columns:
         display_df[c] = display_df[c].apply(_format_number)
-st.dataframe(display_df.rename(columns=column_labels), width="stretch", hide_index=True)
+st.dataframe(display_df.rename(columns=column_labels), use_container_width=True, hide_index=True)
 
 with st.expander("Metric Definitions", expanded=False):
     for metric_name, metric_desc in METRIC_HELP.items():
         st.markdown(f"- **{metric_name}**: {metric_desc}")
     for sector in ["AI", "SPACE", "MARKET"]:
         st.markdown(f"#### {sector}")
-        st.dataframe(metric_basis_table(sector), width="stretch", hide_index=True)
+        st.dataframe(metric_basis_table(sector), use_container_width=True, hide_index=True)
 
 heatmap_cols = [c for c in portfolio.columns if c.endswith("_normalized")]
 if heatmap_cols:
-    heatmap_input = portfolio.set_index("ticker")[heatmap_cols]
+    heatmap_input = portfolio.set_index("ticker")[heatmap_cols].apply(pd.to_numeric, errors="coerce")
+    heatmap_input = heatmap_input.dropna(axis=1, how="all").dropna(axis=0, how="all")
     metric_name_map = {}
     for col in heatmap_input.columns:
         metric = col.replace("_normalized", "")
         metric_name_map[col] = next((spec.label for specs in METRIC_SPECS.values() for k, spec in specs.items() if k == metric), metric)
-    fig_heat = px.imshow(
-        heatmap_input.rename(columns=metric_name_map),
-        color_continuous_scale="RdYlGn",
-        title="Stock Metric Normalization Heatmap (0~1)",
-        aspect="auto",
-    )
-    st.plotly_chart(fig_heat, width="stretch")
+    if heatmap_input.empty:
+        st.info("히트맵 데이터가 부족합니다.")
+    else:
+        fig_heat = px.imshow(
+            heatmap_input.rename(columns=metric_name_map),
+            color_continuous_scale="RdYlGn",
+            title="Stock Metric Normalization Heatmap (0~1)",
+            aspect="auto",
+        )
+        st.plotly_chart(fig_heat, use_container_width=True)
+else:
+    st.info("히트맵 데이터가 부족합니다.")
 
 fig_score = px.bar(
     portfolio,
@@ -301,7 +418,7 @@ fig_score = px.bar(
     title="Score and Signal by Sector",
 )
 fig_score.update_traces(textposition="outside")
-st.plotly_chart(fig_score, width="stretch")
+st.plotly_chart(fig_score, use_container_width=True)
 
 st.subheader("Notable News")
 news_ticker = st.selectbox("뉴스 조회 종목", portfolio["ticker"].tolist(), format_func=lambda t: ticker_label_map.get(t, t))
@@ -310,13 +427,13 @@ keyword_filter = st.text_input("뉴스 키워드 필터")
 notable_rows = []
 news_candidates = portfolio.sort_values(["score", "ticker"], ascending=[False, True])["ticker"].tolist()[:NEWS_SCAN_LIMIT]
 for ticker in news_candidates:
-    rows = recent_news(ticker, months=2)
+    rows = news_agg.get_stock_news(ticker, days=60)
     for item in rows[:2]:
         notable_rows.append(
             {
                 "ticker": ticker,
                 "company": _display_name(portfolio[portfolio["ticker"] == ticker].iloc[0]),
-                "datetime": item.get("datetime", ""),
+                "datetime": _format_news_datetime(item.get("datetime")),
                 "source": item.get("source", ""),
                 "headline": item.get("headline", ""),
                 "summary": item.get("summary", ""),
@@ -328,7 +445,7 @@ if notable_rows:
     notable_df = pd.DataFrame(notable_rows).sort_values("datetime", ascending=False).head(5)
     st.dataframe(
         notable_df[["datetime", "company", "source", "headline", "url"]],
-        width="stretch",
+        use_container_width=True,
         hide_index=True,
     )
 else:
@@ -337,13 +454,13 @@ else:
 news_rows = recent_news(news_ticker, keyword=keyword_filter, months=3)
 if news_rows:
     news_df = pd.DataFrame(news_rows).head(5)
-    st.dataframe(news_df[["datetime", "source", "headline", "summary", "url"]], width="stretch", hide_index=True)
+    st.dataframe(news_df[["datetime", "source", "headline", "summary", "url"]], use_container_width=True, hide_index=True)
 
     keywords = extract_keywords(news_rows)
     if keywords:
         keyword_df = pd.DataFrame(keywords)
         fig_kw = px.bar(keyword_df, x="keyword", y="count", title="뉴스 키워드 빈도")
-        st.plotly_chart(fig_kw, width="stretch")
+        st.plotly_chart(fig_kw, use_container_width=True)
 
     score_series = portfolio.loc[portfolio["ticker"] == news_ticker, "score"]
     if not score_series.empty:
@@ -356,7 +473,7 @@ if news_rows:
             ]
         )
         fig_signal = px.bar(signal_df, x="Metric", y="Score", range_y=[0, 100], title="AI 판단 점수")
-        st.plotly_chart(fig_signal, width="stretch")
+        st.plotly_chart(fig_signal, use_container_width=True)
 else:
     st.info("최근 3개월 뉴스가 없거나 API 키가 설정되지 않았습니다.")
 
@@ -365,7 +482,10 @@ sector_overview = {
     "Technology": "AI, 클라우드, 반도체 사이클과 소프트웨어 생산성 개선이 핵심 트렌드입니다.",
     "Healthcare": "신약 파이프라인, 규제 변화, 보험수가 환경이 핵심 변수입니다.",
     "Financial": "금리, 대손비용, 자본건전성 변화가 실적에 직접 반영됩니다.",
-    "Manufacturing": "원자재 가격, 공급망 안정성, 설비투자 회복이 중요합니다.",
+    "Industrials": "수주·설비투자·방산/항공 수요 흐름이 핵심입니다.",
+    "Communication Services": "플랫폼 트래픽, 광고 경기, 구독 성장률이 중요합니다.",
+    "Materials": "원자재 가격과 공급 사이클이 수익성에 직접 영향을 줍니다.",
+    "Energy": "유가·가스 가격과 정책 수혜(원전/재생)가 성과를 좌우합니다.",
 }
 sector_tabs = st.tabs(sorted(portfolio["sector"].dropna().unique().tolist()))
 for idx, sector_name in enumerate(sorted(portfolio["sector"].dropna().unique().tolist())):
@@ -374,16 +494,39 @@ for idx, sector_name in enumerate(sorted(portfolio["sector"].dropna().unique().t
         st.markdown(f"### {sector_name}")
         st.write(sector_overview.get(sector_name, "선택 종목 기반 섹터로, 실적·밸류에이션·뉴스 흐름을 함께 모니터링하세요."))
 
+        st.markdown("#### Sector News")
+        sector_news = news_agg.get_sector_news(sector_name, days=7)
+        if sector_news:
+            for article in sector_news[:5]:
+                dt = _format_news_datetime(article.get("datetime"))
+                st.markdown(f"- **{article.get('headline', '')}** ({article.get('source', '')}, {dt})  \n  [Read more]({article.get('url', '')})")
+        else:
+            st.info("섹터 뉴스를 불러오지 못했습니다.")
+
         st.markdown("#### Sector Financial Snapshot")
-        numeric_cols = [c for c in ["score", "pe_ratio", "asset_turnover", "operating_margin", "debt_ratio"] if c in sec_df.columns]
+        numeric_cols = [c for c in ["score", "pe_ratio", "peg_ratio", "asset_turnover", "operating_margin", "debt_ratio"] if c in sec_df.columns]
         if numeric_cols:
             snapshot = pd.DataFrame(
                 [{"Metric": c, "Average": _format_number(pd.to_numeric(sec_df[c], errors="coerce").mean())} for c in numeric_cols]
             )
-            st.dataframe(snapshot, width="stretch", hide_index=True)
+            st.dataframe(snapshot, use_container_width=True, hide_index=True)
 
         st.markdown("#### Sector Ranking")
         ranking = sec_df.copy()
         ranking["종목명"] = ranking.apply(_display_name, axis=1)
         ranking["score"] = ranking["score"].apply(_format_number)
-        st.dataframe(ranking[["종목명", "ticker", "score", "signal"]], width="stretch", hide_index=True)
+        st.dataframe(ranking[["종목명", "ticker", "score", "signal"]], use_container_width=True, hide_index=True)
+
+        st.markdown("#### 산업 동향 차트")
+        trend_metrics = [c for c in ["pe_ratio", "peg_ratio", "score"] if c in sec_df.columns]
+        if trend_metrics:
+            trend_data = pd.DataFrame(
+                [{"Metric": m, "Average": pd.to_numeric(sec_df[m], errors="coerce").mean()} for m in trend_metrics]
+            )
+            st.plotly_chart(px.bar(trend_data, x="Metric", y="Average", title=f"{sector_name} 평균 지표"), use_container_width=True)
+
+        if "score" in sec_df.columns:
+            st.plotly_chart(
+                px.bar(sec_df, x="ticker", y="score", color="ticker", title=f"{sector_name} 종목별 Score 비교"),
+                use_container_width=True,
+            )
