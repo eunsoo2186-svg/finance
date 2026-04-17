@@ -56,6 +56,16 @@ def _return_style(value: object) -> str:
     return ""
 
 
+def _format_news_datetime(value: object) -> str:
+    try:
+        ts = int(value or 0)
+    except (TypeError, ValueError):
+        return ""
+    if ts <= 0:
+        return ""
+    return pd.to_datetime(ts, unit="s", utc=True).strftime("%Y-%m-%d")
+
+
 METRIC_HELP = {
     "P/E Ratio": "주가를 주당순이익으로 나눈 값. 낮을수록 밸류에이션 부담이 낮습니다.",
     "PEG Ratio": "P/E를 이익 성장률로 나눈 값. 1에 가까울수록 성장 대비 가격이 균형적입니다.",
@@ -313,10 +323,10 @@ except AttributeError:
             fallback_df[c] = fallback_df[c].apply(_format_number)
     st.dataframe(fallback_df.fillna("-"), use_container_width=True, hide_index=True)
 
-note_ticker = st.selectbox("메모 수정 종목", portfolio["ticker"].tolist(), format_func=lambda t: ticker_label_map.get(t, t))
-note_value = st.text_input("메모", value=str(notes_data.get(note_ticker, "")))
+selected_ticker_for_note = st.selectbox("메모 수정 종목", portfolio["ticker"].tolist(), format_func=lambda t: ticker_label_map.get(t, t))
+note_value = st.text_input("메모", value=str(notes_data.get(selected_ticker_for_note, "")))
 if st.button("메모 저장"):
-    notes_data[note_ticker] = note_value
+    notes_data[selected_ticker_for_note] = note_value
     save_notes(notes_data)
     st.success("메모를 저장했습니다.")
 
@@ -424,7 +434,7 @@ for ticker in news_candidates:
             {
                 "ticker": ticker,
                 "company": _display_name(portfolio[portfolio["ticker"] == ticker].iloc[0]),
-                "datetime": pd.to_datetime(int(item.get("datetime", 0) or 0), unit="s", utc=True).strftime("%Y-%m-%d"),
+                "datetime": _format_news_datetime(item.get("datetime")),
                 "source": item.get("source", ""),
                 "headline": item.get("headline", ""),
                 "summary": item.get("summary", ""),
@@ -489,7 +499,7 @@ for idx, sector_name in enumerate(sorted(portfolio["sector"].dropna().unique().t
         sector_news = news_agg.get_sector_news(sector_name, days=7)
         if sector_news:
             for article in sector_news[:5]:
-                dt = pd.to_datetime(int(article.get("datetime", 0) or 0), unit="s", utc=True).strftime("%Y-%m-%d")
+                dt = _format_news_datetime(article.get("datetime"))
                 st.markdown(f"- **{article.get('headline', '')}** ({article.get('source', '')}, {dt})  \n  [Read more]({article.get('url', '')})")
         else:
             st.info("섹터 뉴스를 불러오지 못했습니다.")

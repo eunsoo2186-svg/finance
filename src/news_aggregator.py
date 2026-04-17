@@ -29,6 +29,7 @@ SECTOR_NEWS_SYMBOLS = {
     "Consumer Cyclical": ["TSLA", "AMZN", "HD"],
 }
 MAX_SECTOR_NEWS_SYMBOLS = 3
+# Keep request latency bounded for interactive dashboard refreshes.
 FINNHUB_REQUEST_TIMEOUT = 8
 
 
@@ -89,7 +90,9 @@ class NewsAggregator:
                 if not isinstance(item, dict):
                     continue
                 key = str(item.get("id") or item.get("url") or item.get("headline") or "")
-                if key and key not in merged:
+                if not key:
+                    continue
+                if key not in merged:
                     merged[key] = item
 
         return sorted(
