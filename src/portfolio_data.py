@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import logging
 import os
+import time
+from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from functools import lru_cache
+from functools import lru_cache, wraps
 from json import JSONDecodeError
 from pathlib import Path
-from typing import Dict, Iterable, List, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Tuple
 
 import pandas as pd
 import requests
@@ -38,6 +41,73 @@ SECTOR_TICKERS = {
 }
 
 SECTOR_HIERARCHY = DEFAULT_SECTOR_HIERARCHY
+
+
+def ttl_cache(maxsize: int, ttl: int):
+    """TTL 기반 캐시 데코레이터."""
+    cache_dict: OrderedDict[tuple, tuple[Any, float]] = OrderedDict()
+
+    def decorator(func: Callable):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            key = (args, tuple(sorted(kwargs.items())))
+            now = time.time()
+            if key in cache_dict:
+                result, expiry = cache_dict[key]
+                if now < expiry:
+                    cache_dict.move_to_end(key)
+                    return result
+                del cache_dict[key]
+
+            result = func(*args, **kwargs)
+            cache_dict[key] = (result, now + ttl)
+            cache_dict.move_to_end(key)
+            while len(cache_dict) > maxsize:
+                cache_dict.popitem(last=False)
+            return result
+
+        def cache_clear():
+            cache_dict.clear()
+
+        wrapper.cache_clear = cache_clear  # type: ignore[attr-defined]
+        return wrapper
+
+    return decorator
+
+
+_RUN_SECTOR_AVERAGE_CACHE: Dict[tuple[str, str], float] = {}
+
+
+def _set_run_sector_metric_averages(rows: List[Dict[str, object]]) -> None:
+    global _RUN_SECTOR_AVERAGE_CACHE
+    grouped: Dict[tuple[str, str], List[float]] = {}
+    for row in rows:
+        sector = str(row.get("score_sector", "MARKET"))
+        metrics = row.get("metrics")
+        if not isinstance(metrics, dict):
+            continue
+        specs = METRIC_SPECS.get(sector, {})
+        for metric_name in specs:
+            raw_value = metrics.get(metric_name)
+            if raw_value is None:
+                continue
+            try:
+                numeric = float(raw_value)
+            except (TypeError, ValueError):
+                continue
+            if pd.isna(numeric):
+                continue
+            grouped.setdefault((sector, metric_name), []).append(numeric)
+
+    _RUN_SECTOR_AVERAGE_CACHE = {
+        key: float(sum(values) / len(values))
+        for key, values in grouped.items()
+        if values
+    }
+
+
+def _sector_metric_average(sector: str, metric_name: str) -> float | None:
+    return _RUN_SECTOR_AVERAGE_CACHE.get((sector, metric_name))
 
 
 def _normalize_market_label(raw_exchange: object) -> str:
@@ -207,6 +277,44 @@ METRIC_SPECS: Dict[str, Dict[str, MetricSpec]] = {
             "Tech Cycle Position", -0.4, 0.8, True, "finnhub.stock.metric.52WeekPriceReturnDaily", "52WeekPriceReturnDaily"
         ),
     },
+    "KOSPI": {
+        "pe_ratio": MetricSpec("P/E Ratio", 4, 30, False, "yfinance.info.trailingPE", "trailingPE"),
+        "peg_ratio": MetricSpec("PEG Ratio", 0.2, 2.0, False, "yfinance.info.pegRatio", "pegRatio"),
+        "revenue_growth_yoy": MetricSpec(
+            "YoY Revenue Growth", -0.2, 0.6, True, "yfinance.info.revenueGrowth", "revenueGrowth"
+        ),
+        "asset_turnover": MetricSpec(
+            "Asset Turnover", 0.1, 1.5, True, "yfinance.info.totalRevenue,totalAssets", "totalRevenue / totalAssets"
+        ),
+        "debt_ratio": MetricSpec(
+            "Debt Ratio", 0.1, 3.0, False, "yfinance.info.debtToEquity", "debtToEquity / 100"
+        ),
+        "dividend_yield": MetricSpec(
+            "Dividend Yield", 0.0, 0.06, True, "yfinance.info.dividendYield", "dividendYield"
+        ),
+        "tech_cycle": MetricSpec(
+            "Tech Cycle Position", -0.4, 0.8, True, "finnhub.stock.metric.52WeekPriceReturnDaily", "52WeekPriceReturnDaily"
+        ),
+    },
+    "KOSDAQ": {
+        "pe_ratio": MetricSpec("P/E Ratio", 4, 30, False, "yfinance.info.trailingPE", "trailingPE"),
+        "peg_ratio": MetricSpec("PEG Ratio", 0.2, 2.0, False, "yfinance.info.pegRatio", "pegRatio"),
+        "revenue_growth_yoy": MetricSpec(
+            "YoY Revenue Growth", -0.1, 0.8, True, "yfinance.info.revenueGrowth", "revenueGrowth"
+        ),
+        "asset_turnover": MetricSpec(
+            "Asset Turnover", 0.1, 1.5, True, "yfinance.info.totalRevenue,totalAssets", "totalRevenue / totalAssets"
+        ),
+        "debt_ratio": MetricSpec(
+            "Debt Ratio", 0.1, 3.0, False, "yfinance.info.debtToEquity", "debtToEquity / 100"
+        ),
+        "dividend_yield": MetricSpec(
+            "Dividend Yield", 0.0, 0.06, True, "yfinance.info.dividendYield", "dividendYield"
+        ),
+        "tech_cycle": MetricSpec(
+            "Tech Cycle Position", -0.4, 0.8, True, "finnhub.stock.metric.52WeekPriceReturnDaily", "52WeekPriceReturnDaily"
+        ),
+    },
 }
 
 DEFAULT_WEIGHTS: Dict[str, Dict[str, float]] = {
@@ -235,6 +343,24 @@ DEFAULT_WEIGHTS: Dict[str, Dict[str, float]] = {
         "dividend_yield": 0.10,
         "tech_cycle": 0.09,
     },
+    "KOSPI": {
+        "pe_ratio": 0.16,
+        "peg_ratio": 0.16,
+        "revenue_growth_yoy": 0.20,
+        "asset_turnover": 0.16,
+        "debt_ratio": 0.13,
+        "dividend_yield": 0.10,
+        "tech_cycle": 0.09,
+    },
+    "KOSDAQ": {
+        "pe_ratio": 0.16,
+        "peg_ratio": 0.16,
+        "revenue_growth_yoy": 0.20,
+        "asset_turnover": 0.16,
+        "debt_ratio": 0.13,
+        "dividend_yield": 0.10,
+        "tech_cycle": 0.09,
+    },
 }
 
 for _sector_name, _weights in DEFAULT_WEIGHTS.items():
@@ -242,7 +368,7 @@ for _sector_name, _weights in DEFAULT_WEIGHTS.items():
         LOGGER.warning("DEFAULT_WEIGHTS for %s should sum to 1.0 (actual=%s)", _sector_name, sum(_weights.values()))
 
 
-@lru_cache(maxsize=64)
+@ttl_cache(maxsize=64, ttl=300)
 def _finnhub_metrics(symbol: str) -> Dict[str, float]:
     api_key = os.getenv("FINNHUB_API_KEY", "")
     if not api_key:
@@ -262,7 +388,7 @@ def _finnhub_metrics(symbol: str) -> Dict[str, float]:
         return {}
 
 
-@lru_cache(maxsize=256)
+@ttl_cache(maxsize=256, ttl=300)
 def _ticker_info(symbol: str) -> Dict[str, object]:
     try:
         info = yf.Ticker(symbol).info or {}
@@ -271,7 +397,7 @@ def _ticker_info(symbol: str) -> Dict[str, object]:
         return {}
 
 
-@lru_cache(maxsize=256)
+@ttl_cache(maxsize=256, ttl=600)
 def _ticker_object(symbol: str) -> yf.Ticker:
     return yf.Ticker(symbol)
 
@@ -375,6 +501,9 @@ def get_sector(symbol: str) -> str:
     if symbol in SPACE_TICKERS:
         return "SPACE"
     meta = metadata_for_ticker(symbol, _ticker_info(symbol))
+    market = str(meta.get("market", "UNKNOWN")).upper()
+    if market in {"KOSPI", "KOSDAQ"}:
+        return market
     inferred = meta.get("sector", "MARKET")
     return inferred if inferred in METRIC_SPECS else "MARKET"
 
@@ -406,20 +535,75 @@ def get_sector_hierarchy(symbol: str) -> Tuple[str, str, str]:
     return sector or "Unknown", sub_sector or "Unknown", industry
 
 
-def normalize_metric(value: float | None, spec: MetricSpec) -> float:
+def normalize_metric(value: float | None, spec: MetricSpec, sector: str | None = None, metric_name: str | None = None) -> float:
     """Normalize a raw metric into [0, 1] using sector metric bounds.
 
     Missing values return 0.5 (neutral). For metrics where lower values are better,
     the normalized score is inverted.
     """
     if value is None:
-        return 0.5
+        if sector and metric_name:
+            value = _sector_metric_average(sector, metric_name)
+        if value is None:
+            return 0.5
     clipped = min(max(value, spec.min_value), spec.max_value)
     span = spec.max_value - spec.min_value
     if span == 0:
         return 0.5
     ratio = (clipped - spec.min_value) / span
     return ratio if spec.higher_is_better else 1.0 - ratio
+
+
+def fetch_atr(symbol: str, period: int = 14) -> float:
+    ticker = _ticker_object(symbol)
+    lookback = max(30, period * 3)
+    history = ticker.history(period=f"{lookback}d")
+    if history is None or history.empty:
+        return 0.0
+    high = pd.to_numeric(history.get("High"), errors="coerce")
+    low = pd.to_numeric(history.get("Low"), errors="coerce")
+    close = pd.to_numeric(history.get("Close"), errors="coerce")
+    prev_close = close.shift(1)
+    true_range = pd.concat([(high - low).abs(), (high - prev_close).abs(), (low - prev_close).abs()], axis=1).max(axis=1)
+    atr = pd.to_numeric(true_range, errors="coerce").rolling(period).mean().dropna()
+    if atr.empty:
+        return 0.0
+    return float(atr.iloc[-1])
+
+
+def compute_stop_loss(symbol: str, current_price: float, atr_multiplier: float = 2.0) -> float:
+    """ATR 기반 손절가."""
+    atr = fetch_atr(symbol, period=14)
+    return round(float(current_price) - float(atr_multiplier) * float(atr), 2)
+
+
+def compute_target_price(current_price: float, score: float) -> float:
+    """스코어 45~100을 5~20% 상승으로 매핑."""
+    clipped_score = min(100.0, max(45.0, float(score)))
+    upside_pct = 0.05 + (clipped_score - 45.0) / 55.0 * 0.15
+    return round(float(current_price) * (1 + upside_pct), 2)
+
+
+def suggest_position_size(
+    score: float,
+    total_portfolio_value: float,
+    win_rate: float = 0.55,
+    avg_win_loss_ratio: float = 1.5,
+) -> Dict[str, float | str]:
+    """Kelly Criterion: f* = (bp - q) / b."""
+    portfolio_value = max(0.0, float(total_portfolio_value))
+    b = max(0.01, float(avg_win_loss_ratio))
+    p = min(1.0, max(0.0, float(win_rate)))
+    q = 1 - p
+    kelly_fraction = max(0.0, (b * p - q) / b)
+    suggested_amount = portfolio_value * kelly_fraction
+    max_amount = portfolio_value * 0.20
+    return {
+        "kelly_fraction": round(kelly_fraction, 4),
+        "suggested_amount": round(min(suggested_amount, max_amount), 2),
+        "max_amount": round(max_amount, 2),
+        "rationale": f"Kelly {kelly_fraction*100:.1f}% 기반 (score={float(score):.1f})",
+    }
 
 
 def stock_metrics(symbol: str, sector: str) -> Dict[str, float | None]:
@@ -456,6 +640,7 @@ def stock_metrics(symbol: str, sector: str) -> Dict[str, float | None]:
             "asset_turnover": asset_turnover,
             "tech_cycle": _safe_number(finnhub.get("52WeekPriceReturnDaily"), 0.01),
             "current_price": current_price,
+            "daily_change_pct": _safe_number(info.get("regularMarketChangePercent"), 0.01),
         }
     elif sector == "SPACE":
         metrics = {
@@ -466,6 +651,7 @@ def stock_metrics(symbol: str, sector: str) -> Dict[str, float | None]:
             "backlog_proxy": _quarterly_revenue_growth(ticker),
             "gov_cycle": _safe_number(finnhub.get("52WeekPriceReturnDaily"), 0.01),
             "current_price": current_price,
+            "daily_change_pct": _safe_number(info.get("regularMarketChangePercent"), 0.01),
         }
     else:
         metrics = {
@@ -477,6 +663,7 @@ def stock_metrics(symbol: str, sector: str) -> Dict[str, float | None]:
             "dividend_yield": _safe_number(info.get("dividendYield")),
             "tech_cycle": _safe_number(finnhub.get("52WeekPriceReturnDaily"), 0.01),
             "current_price": current_price,
+            "daily_change_pct": _safe_number(info.get("regularMarketChangePercent"), 0.01),
         }
 
     if market in {"KOSPI", "KOSDAQ"}:
@@ -504,7 +691,7 @@ def score_stock(metrics: Dict[str, float | None], sector: str, weights: Dict[str
 
     for metric_name, spec in specs.items():
         metric_weight = effective_weights[metric_name] / weight_total
-        metric_score = normalize_metric(metrics.get(metric_name), spec)
+        metric_score = normalize_metric(metrics.get(metric_name), spec, sector=sector, metric_name=metric_name)
         normalized[metric_name] = metric_score
         score += metric_score * metric_weight
 
@@ -519,19 +706,103 @@ def signal_from_score(score: float) -> str:
     return "매도"
 
 
+def build_entry_analysis(symbol: str, metrics: Dict[str, float | None], score: float, news_count: int = 0, sentiment_ratio: float = 0.5) -> Dict[str, object]:
+    pe = metrics.get("pe_ratio")
+    peg = metrics.get("peg_ratio")
+    growth = metrics.get("revenue_growth_yoy")
+    eps_growth = metrics.get("eps_growth_yoy")
+    rsi = metrics.get("rsi")
+    above_20ma = bool(metrics.get("price_above_20ma", False))
+    volume_ratio = metrics.get("volume_ratio")
+    level_1_pass = (pe is not None and pe <= 35) and (peg is not None and peg <= 2.0) and (rsi is None or 45 <= rsi <= 70)
+    level_2_pass = (eps_growth is None or eps_growth >= 0) and (growth is None or growth >= 0) and (peg is None or peg <= 2.0)
+    level_3_pass = (rsi is None or 45 <= rsi <= 65) and (above_20ma or metrics.get("ma20") is None) and (volume_ratio is None or volume_ratio >= 0.8)
+    level_4_pass = news_count <= 0 or sentiment_ratio >= 0.5
+    level_5_pass = score >= 70
+    decision = "🟢 강 진입" if level_5_pass and level_1_pass and level_2_pass else ("🟡 중 진입" if score >= 55 else "🟠 관찰")
+    return {
+        "symbol": symbol,
+        "score": round(float(score), 2),
+        "decision": decision,
+        "levels": [
+            {"level": 1, "name": "기본 스크린", "pass": level_1_pass, "detail": f"PEG={peg}, PE={pe}, RSI={rsi}"},
+            {"level": 2, "name": "성장성 검증", "pass": level_2_pass, "detail": f"EPS={eps_growth}, Revenue={growth}, PEG={peg}"},
+            {"level": 3, "name": "기술적 신호", "pass": level_3_pass, "detail": f"20MA={above_20ma}, 거래량비={volume_ratio}, RSI={rsi}"},
+            {"level": 4, "name": "뉴스/감성", "pass": level_4_pass, "detail": f"뉴스={news_count}, 감성비율={sentiment_ratio:.2f}"},
+            {"level": 5, "name": "최종 점수/Kelly", "pass": level_5_pass, "detail": f"최종 점수={score:.1f}"},
+        ],
+    }
+
+
+def build_exit_analysis(symbol: str, metrics: Dict[str, float | None], profit_rate: float | None) -> Dict[str, object]:
+    profit = float(profit_rate) if profit_rate is not None else 0.0
+    rsi = metrics.get("rsi")
+    above_200ma = bool(metrics.get("price_above_200ma", True))
+    volume_ratio = metrics.get("volume_ratio")
+    eps_growth = metrics.get("eps_growth_yoy")
+    level_1_risk = 1 if profit <= -20 else (0 if profit > -5 else 0.5)
+    level_2_risk = 1 if (rsi is not None and rsi < 35) or not above_200ma or (volume_ratio is not None and volume_ratio > 2.0) else 0
+    level_3_risk = 1 if (eps_growth is not None and eps_growth < 0) else 0
+    risk_score = int(round(level_1_risk + level_2_risk + level_3_risk + (1 if profit <= -10 else 0)))
+    risk_score = max(0, min(5, risk_score))
+    decision = "🔴 손절" if risk_score >= 4 else ("🟡 손절 검토" if risk_score >= 2 else "🟢 보유")
+    return {
+        "symbol": symbol,
+        "risk_score": risk_score,
+        "decision": decision,
+        "levels": [
+            {"level": 1, "name": "손실률 필터", "pass": profit > -5, "detail": f"손실률={profit:+.1f}%"},
+            {"level": 2, "name": "기술적 신호", "pass": level_2_risk == 0, "detail": f"RSI={rsi}, 200MA상단={above_200ma}, 거래량비={volume_ratio}"},
+            {"level": 3, "name": "기본가치 악화", "pass": level_3_risk == 0, "detail": f"EPS성장={eps_growth}"},
+            {"level": 4, "name": "최종 판정", "pass": risk_score < 2, "detail": f"위험도={risk_score}/5"},
+        ],
+    }
+
+
 def build_portfolio_dataframe(symbols: Iterable[str], weight_overrides: Dict[str, Dict[str, float]] | None = None) -> pd.DataFrame:
     rows: List[Dict[str, object]] = []
     weight_overrides = weight_overrides or {}
     all_metric_keys = sorted({metric for specs in METRIC_SPECS.values() for metric in specs.keys()})
+    symbols_to_process = sorted({s.strip().upper() for s in symbols if s and s.strip()})
+    prefetched: List[Dict[str, object]] = []
 
-    for symbol in sorted({s.strip().upper() for s in symbols if s and s.strip()}):
+    def _process_symbol(symbol: str) -> Dict[str, object]:
         score_sector = get_sector(symbol)
         display_sector, display_sub_sector, display_industry = get_sector_hierarchy(symbol)
         metrics = stock_metrics(symbol, score_sector)
-        weights = weight_overrides.get(score_sector, DEFAULT_WEIGHTS[score_sector])
-        score, normalized = score_stock(metrics, score_sector, weights)
         meta = metadata_for_ticker(symbol, _ticker_info(symbol))
+        return {
+            "symbol": symbol,
+            "score_sector": score_sector,
+            "display_sector": display_sector,
+            "display_sub_sector": display_sub_sector,
+            "display_industry": display_industry,
+            "metrics": metrics,
+            "meta": meta,
+        }
 
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        futures = {executor.submit(_process_symbol, symbol): symbol for symbol in symbols_to_process}
+        for future in as_completed(futures):
+            symbol = futures[future]
+            try:
+                prefetched.append(future.result())
+            except Exception as exc:
+                LOGGER.warning("⚠️ %s: %s", symbol, exc)
+
+    _set_run_sector_metric_averages(prefetched)
+
+    for item in sorted(prefetched, key=lambda x: str(x.get("symbol", ""))):
+        symbol = str(item["symbol"])
+        score_sector = str(item["score_sector"])
+        display_sector = str(item["display_sector"])
+        display_sub_sector = str(item["display_sub_sector"])
+        display_industry = str(item["display_industry"])
+        metrics = item["metrics"] if isinstance(item.get("metrics"), dict) else {}
+        meta = item["meta"] if isinstance(item.get("meta"), dict) else {}
+
+        weights = weight_overrides.get(score_sector, DEFAULT_WEIGHTS.get(score_sector, DEFAULT_WEIGHTS["MARKET"]))
+        score, normalized = score_stock(metrics, score_sector, weights)
         row: Dict[str, object] = {
             "ticker": symbol,
             "company_name": meta.get("company_name", symbol),
@@ -550,6 +821,7 @@ def build_portfolio_dataframe(symbols: Iterable[str], weight_overrides: Dict[str
             row[key] = value if value is not None else pd.NA
             row[f"{key}_normalized"] = normalized.get(key, pd.NA)
         row["current_price"] = metrics.get("current_price", pd.NA)
+        row["daily_change_pct"] = metrics.get("daily_change_pct", pd.NA)
         rows.append(row)
 
     frame = pd.DataFrame(rows)
@@ -558,6 +830,14 @@ def build_portfolio_dataframe(symbols: Iterable[str], weight_overrides: Dict[str
 
     frame["sector_rank"] = frame.groupby("sector")["score"].rank(ascending=False, method="min").astype(int)
     return frame.sort_values(["sector", "score"], ascending=[True, False]).reset_index(drop=True)
+
+
+def build_portfolio_dataframe_parallel(
+    symbols: Iterable[str],
+    weight_overrides: Dict[str, Dict[str, float]] | None = None,
+) -> pd.DataFrame:
+    """ThreadPoolExecutor로 병렬 페칭."""
+    return build_portfolio_dataframe(symbols, weight_overrides=weight_overrides)
 
 
 def metric_basis_table(sector: str) -> pd.DataFrame:

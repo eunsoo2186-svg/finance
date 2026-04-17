@@ -6,20 +6,32 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from ai_analysis import recommendation_from_score
+from ai_analysis import blended_signal_score, entry_signal_detail, exit_signal_detail, recommendation_from_score
 from portfolio_data import build_portfolio_dataframe, metric_basis_table
 from watchlist_manager import load_watchlist, save_holdings, load_holdings
 
 
 class DashboardRequirementTests(unittest.TestCase):
     def test_recommendation_split_for_held_vs_unheld(self):
-        self.assertEqual(recommendation_from_score(80, held=True), "매도")
+        self.assertEqual(recommendation_from_score(80, held=True), "부분익절")
         self.assertEqual(recommendation_from_score(60, held=True), "보유")
-        self.assertEqual(recommendation_from_score(50, held=True), "추매")
+        self.assertEqual(recommendation_from_score(45, held=True), "비중축소")
         self.assertEqual(recommendation_from_score(30, held=True), "손절")
         self.assertEqual(recommendation_from_score(80, held=False), "매수")
         self.assertEqual(recommendation_from_score(60, held=False), "관심")
+        self.assertEqual(recommendation_from_score(50, held=False), "관찰")
         self.assertEqual(recommendation_from_score(30, held=False), "회피")
+
+    def test_blended_score_applies_sentiment_ratio(self):
+        self.assertEqual(blended_signal_score(70, 10, sentiment_ratio=0.0), 70.0)
+        self.assertEqual(blended_signal_score(70, 10, sentiment_ratio=0.5), 72.5)
+
+    def test_entry_exit_detail_helpers(self):
+        entry = entry_signal_detail("MSFT", {"pe_ratio": 20.0, "peg_ratio": 1.1, "revenue_growth_yoy": 0.2}, 80, news_count=4, sentiment_ratio=0.75)
+        exit_result = exit_signal_detail("TSLA", {"rsi": 30.0, "price_above_200ma": False, "eps_growth_yoy": -0.1}, -12.0)
+        self.assertIn("levels", entry)
+        self.assertEqual(len(entry["levels"]), 5)
+        self.assertIn("risk_score", exit_result)
 
     def test_metric_labels_are_english_only(self):
         ai_basis = metric_basis_table("AI")
