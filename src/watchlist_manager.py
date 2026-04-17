@@ -22,6 +22,7 @@ WATCHLIST_COLUMNS = [
     "exchange",
     "sector",
     "sub_sector",
+    "industry",
 ]
 
 
@@ -66,6 +67,7 @@ def load_watchlist() -> pd.DataFrame:
                     "exchange": "NASDAQ",
                     "sector": "Technology",
                     "sub_sector": "Software",
+                    "industry": "Software - Infrastructure",
                 },
                 {
                     "ticker": "TSLA",
@@ -74,6 +76,7 @@ def load_watchlist() -> pd.DataFrame:
                     "exchange": "NASDAQ",
                     "sector": "Technology",
                     "sub_sector": "Electric Vehicles",
+                    "industry": "Auto Manufacturers",
                 },
             ]
         )
@@ -105,8 +108,11 @@ def load_watchlist() -> pd.DataFrame:
         df["sector"] = "MARKET"
     if "sub_sector" not in df.columns:
         df["sub_sector"] = "General"
+    if "industry" not in df.columns:
+        df["industry"] = df["sub_sector"].fillna("General")
     df["sector"] = df["sector"].fillna("MARKET").astype(str).str.strip()
     df["sub_sector"] = df["sub_sector"].fillna("General").astype(str).str.strip()
+    df["industry"] = df["industry"].fillna(df["sub_sector"]).astype(str).str.strip()
 
     return (
         df[WATCHLIST_COLUMNS]
@@ -136,6 +142,8 @@ def save_watchlist(df: pd.DataFrame) -> None:
         payload["sector"] = "MARKET"
     if "sub_sector" not in payload.columns:
         payload["sub_sector"] = "General"
+    if "industry" not in payload.columns:
+        payload["industry"] = payload["sub_sector"].fillna("General")
 
     payload["ticker"] = payload["ticker"].apply(_normalize_ticker)
     payload["exchange"] = payload["exchange"].fillna("UNKNOWN").astype(str).str.upper().str.strip()
@@ -148,6 +156,7 @@ def save_watchlist(df: pd.DataFrame) -> None:
     ]
     payload["sector"] = payload["sector"].fillna("MARKET").astype(str).str.strip()
     payload["sub_sector"] = payload["sub_sector"].fillna("General").astype(str).str.strip()
+    payload["industry"] = payload["industry"].fillna(payload["sub_sector"]).astype(str).str.strip()
 
     payload = (
         payload[WATCHLIST_COLUMNS]

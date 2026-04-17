@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from portfolio_data import (
     MetricSpec,
     build_portfolio_dataframe,
+    get_sector_hierarchy,
     get_sector_info,
     load_all_tickers,
     normalize_metric,
@@ -98,6 +99,12 @@ class PortfolioDataTests(unittest.TestCase):
         self.assertTrue(sector)
         self.assertTrue(sub_sector)
 
+    def test_get_sector_hierarchy_includes_industry(self):
+        sector, sub_sector, industry = get_sector_hierarchy("MSFT")
+        self.assertTrue(sector)
+        self.assertTrue(sub_sector)
+        self.assertTrue(industry)
+
     def test_load_all_tickers_reads_market_db_csv(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             csv_path = Path(tmp_dir) / "market_db.csv"
@@ -145,6 +152,7 @@ class PortfolioDataTests(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["ticker"], "AAPL")
         self.assertEqual(rows[0]["company_name_en"], "Apple")
+        self.assertIn("industry", rows[0])
 
     @patch("portfolio_data._finnhub_metrics", return_value={})
     @patch("portfolio_data._ticker_object")

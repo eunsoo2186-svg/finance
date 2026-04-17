@@ -79,6 +79,7 @@ def _load_nasdaq_rows() -> List[Dict[str, str]]:
                 "exchange": "NASDAQ",
                 "sector": DEFAULT_UNKNOWN,
                 "sub_sector": DEFAULT_UNKNOWN,
+                "industry": DEFAULT_UNKNOWN,
             }
         )
     return out
@@ -103,6 +104,7 @@ def _load_nyse_rows() -> List[Dict[str, str]]:
                 "exchange": "NYSE",
                 "sector": DEFAULT_UNKNOWN,
                 "sub_sector": DEFAULT_UNKNOWN,
+                "industry": DEFAULT_UNKNOWN,
             }
         )
     return out
@@ -142,6 +144,7 @@ def _load_krx_rows(market: str) -> List[Dict[str, str]]:
                 "exchange": market.upper(),
                 "sector": DEFAULT_UNKNOWN,
                 "sub_sector": DEFAULT_UNKNOWN,
+                "industry": DEFAULT_UNKNOWN,
             }
         )
     if out:
@@ -211,6 +214,7 @@ def _load_krx_rows_from_cache(market: str) -> List[Dict[str, str]]:
                     "exchange": normalized_market,
                     "sector": sector,
                     "sub_sector": sub_sector,
+                    "industry": sub_sector,
                 }
             )
 
@@ -240,6 +244,7 @@ def _load_watchlist_rows() -> List[Dict[str, str]]:
                 "exchange": exchange or "UNKNOWN",
                 "sector": str(row.get("sector") or DEFAULT_UNKNOWN).strip() or DEFAULT_UNKNOWN,
                 "sub_sector": str(row.get("sub_sector") or DEFAULT_UNKNOWN).strip() or DEFAULT_UNKNOWN,
+                "industry": str(row.get("industry") or row.get("sub_sector") or DEFAULT_UNKNOWN).strip() or DEFAULT_UNKNOWN,
             }
         )
     return out
@@ -272,6 +277,7 @@ def _enrich_sectors(rows: Iterable[Dict[str, str]], delay_seconds: float) -> Lis
             info = {}
         row["sector"] = str(info.get("sector") or row.get("sector") or "").strip()
         row["sub_sector"] = str(info.get("industry") or row.get("sub_sector") or "").strip()
+        row["industry"] = str(info.get("industry") or row.get("industry") or row.get("sub_sector") or "").strip()
         enriched.append(row)
         if delay_seconds > 0:
             time.sleep(delay_seconds)
@@ -297,7 +303,7 @@ def build_market_db(output_path: Path, enrich_sectors: bool, delay_seconds: floa
             merged[ticker] = row
             continue
         current = merged[ticker]
-        for key in ("company_name_ko", "company_name_en", "exchange", "sector", "sub_sector"):
+        for key in ("company_name_ko", "company_name_en", "exchange", "sector", "sub_sector", "industry"):
             existing = str(current.get(key, "") or "").strip()
             incoming = str(row.get(key, "") or "").strip()
             if not existing or existing.upper() == DEFAULT_UNKNOWN.upper():
@@ -310,7 +316,7 @@ def build_market_db(output_path: Path, enrich_sectors: bool, delay_seconds: floa
 
     frame = pd.DataFrame(rows)
     if frame.empty:
-        frame = pd.DataFrame(columns=["ticker", "company_name_ko", "company_name_en", "exchange", "sector", "sub_sector"])
+        frame = pd.DataFrame(columns=["ticker", "company_name_ko", "company_name_en", "exchange", "sector", "sub_sector", "industry"])
     else:
         frame = frame.sort_values(["exchange", "ticker"]).reset_index(drop=True)
 
