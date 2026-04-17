@@ -46,13 +46,22 @@ alert_df = portfolio[portfolio["score"] <= score_alert]
 if not alert_df.empty:
     st.error(f"⚠️ 이상 알림: 점수 {score_alert} 이하 종목 {', '.join(alert_df['ticker'].tolist())}")
 
+
+def sector_mean_score(df: pd.DataFrame, sector: str) -> float:
+    """Return sector average score, or 0.0 when no ticker exists in the sector."""
+    series = df[df["sector"] == sector]["score"]
+    if series.empty:
+        return 0.0
+    return round(float(series.mean()), 2)
+
+
 col1, col2, col3 = st.columns(3)
 with col1:
     st.metric("총 모니터링 종목", len(portfolio))
 with col2:
-    st.metric("AI 평균 점수", round(portfolio[portfolio["sector"] == "AI"]["score"].mean(), 2))
+    st.metric("AI 평균 점수", sector_mean_score(portfolio, "AI"))
 with col3:
-    st.metric("우주 평균 점수", round(portfolio[portfolio["sector"] == "SPACE"]["score"].mean(), 2))
+    st.metric("우주 평균 점수", sector_mean_score(portfolio, "SPACE"))
 
 st.subheader("섹터별 종목 점수카드")
 

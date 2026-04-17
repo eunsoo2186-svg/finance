@@ -6,6 +6,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from portfolio_data import MetricSpec, normalize_metric, score_stock, signal_from_score
 
+BUY_SIGNAL = "진입"
+HOLD_SIGNAL = "보유"
+SELL_SIGNAL = "매도"
+
 
 class PortfolioDataTests(unittest.TestCase):
     def test_normalize_lower_better(self):
@@ -38,7 +42,10 @@ class PortfolioDataTests(unittest.TestCase):
         self.assertGreaterEqual(score, 0)
         self.assertLessEqual(score, 100)
         self.assertEqual(set(normalized.keys()), set(metrics.keys()))
-        self.assertIn(signal_from_score(score), {"진입", "보유", "매도"})
+        for value in normalized.values():
+            self.assertGreaterEqual(value, 0.0)
+            self.assertLessEqual(value, 1.0)
+        self.assertIn(signal_from_score(score), {BUY_SIGNAL, HOLD_SIGNAL, SELL_SIGNAL})
 
 
 if __name__ == "__main__":

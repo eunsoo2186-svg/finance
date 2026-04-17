@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import os
+import logging
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Dict, Iterable, List, Tuple
+from json import JSONDecodeError
 
 import pandas as pd
 import requests
@@ -14,6 +16,7 @@ from dotenv import load_dotenv
 
 ENV_PATH = Path(__file__).resolve().parents[1] / "config" / ".env"
 load_dotenv(ENV_PATH)
+LOGGER = logging.getLogger(__name__)
 
 AI_TICKERS = ["MSFT", "NVDA", "GOOGL", "TSLA"]
 SPACE_TICKERS = ["RTX", "LMT", "NOC", "BA"]
@@ -63,7 +66,12 @@ METRIC_SPECS: Dict[str, Dict[str, MetricSpec]] = {
             "Dividend Yield", 0.0, 0.08, True, "yfinance.info.dividendYield", "dividendYield"
         ),
         "backlog_proxy": MetricSpec(
-            "Contract Pipeline (Proxy)", -0.2, 0.5, True, "yfinance.quarterly_income_stmt", "(최근4개 분기 매출합 / 이전4개 분기 매출합) - 1"
+            "Contract Pipeline (Proxy)",
+            -0.2,
+            0.5,
+            True,
+            "yfinance.quarterly_income_stmt",
+            "(sum of recent 4 quarters revenue / sum of previous 4 quarters revenue) - 1",
         ),
         "gov_cycle": MetricSpec(
             "Gov Spending Cycle (Proxy)", -0.3, 0.4, True, "finnhub.stock.metric.52WeekPriceReturnDaily", "52WeekPriceReturnDaily"
@@ -106,7 +114,8 @@ def _finnhub_metrics(symbol: str) -> Dict[str, float]:
         response.raise_for_status()
         payload = response.json()
         return payload.get("metric", {}) if isinstance(payload, dict) else {}
-    except Exception:
+    except (requests.RequestException, JSONDecodeError, ValueError):
+        LOGGER.warning("Failed to fetch Finnhub metrics for %s", symbol)
         return {}
 
 
@@ -115,7 +124,7 @@ def _safe_number(value, scale: float = 1.0) -> float | None:
         return None
     try:
         val = float(value)
-    except Exception:
+    except (TypeError, ValueError):
         return None
     if pd.isna(val):
         return None
@@ -135,7 +144,7 @@ def _quarterly_revenue_growth(ticker: yf.Ticker) -> float | None:
         if previous == 0:
             return None
         return (recent / previous) - 1.0
-    except Exception:
+    except (KeyError, IndexError, ValueError, TypeError, AttributeError):
         return None
 
 
@@ -148,10 +157,18 @@ def get_sector(symbol: str) -> str:
 
 
 def normalize_metric(value: float | None, spec: MetricSpec) -> float:
+    """Normalize a raw metric into [0, 1] using sector metric bounds.
+
+    Missing values return 0.5 (neutral). For metrics where lower values are better,
+    the normalized score is inverted.
+    """
     if value is None:
         return 0.5
     clipped = min(max(value, spec.min_value), spec.max_value)
-    ratio = (clipped - spec.min_value) / (spec.max_value - spec.min_value)
+    span = spec.max_value - spec.min_value
+    if span == 0:
+        return 0.5
+    ratio = (clipped - spec.min_value) / span
     return ratio if spec.higher_is_better else 1.0 - ratio
 
 
@@ -197,14 +214,21 @@ def stock_metrics(symbol: str, sector: str) -> Dict[str, float | None]:
 
 
 def score_stock(metrics: Dict[str, float | None], sector: str, weights: Dict[str, float]) -> Tuple[float, Dict[str, float]]:
+    """Compute a 0-100 weighted score and per-metric normalized scores."""
     specs = METRIC_SPECS[sector]
     normalized: Dict[str, float] = {}
 
-    weight_total = sum(max(0.0, float(w)) for w in weights.values()) or 1.0
+    effective_weights = {metric: max(0.0, float(weights.get(metric, 0.0))) for metric in specs}
+    weight_total = sum(effective_weights.values())
+    if weight_total <= 0:
+        LOGGER.warning("All weights are zero/negative for sector=%s. Falling back to equal weights.", sector)
+        effective_weights = {metric: 1.0 for metric in specs}
+        weight_total = float(len(specs))
+
     score = 0.0
 
     for metric_name, spec in specs.items():
-        metric_weight = max(0.0, float(weights.get(metric_name, 0.0))) / weight_total
+        metric_weight = effective_weights[metric_name] / weight_total
         metric_score = normalize_metric(metrics.get(metric_name), spec)
         normalized[metric_name] = metric_score
         score += metric_score * metric_weight
