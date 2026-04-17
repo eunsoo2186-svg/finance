@@ -23,7 +23,7 @@ class DashboardRequirementTests(unittest.TestCase):
 
     def test_metric_labels_are_english_only(self):
         ai_basis = metric_basis_table("AI")
-        self.assertFalse(ai_basis["지표"].str.contains(r"[가-힣]").any())
+        self.assertFalse(ai_basis["Metric"].str.contains(r"[가-힣]").any())
 
     @patch("portfolio_data._ticker_info", return_value={})
     @patch(

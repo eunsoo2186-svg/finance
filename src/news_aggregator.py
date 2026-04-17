@@ -11,12 +11,12 @@ import requests
 ENGLISH_STOPWORDS = {"the", "and", "for", "with", "from", "stock", "shares", "will", "this", "that", "company"}
 POSITIVE_WORDS = {"beat", "growth", "surge", "win", "record", "upgrade", "strong", "profit", "optimistic"}
 NEGATIVE_WORDS = {"miss", "fall", "drop", "risk", "downgrade", "loss", "delay", "lawsuit", "weak"}
-POSITIVE_PATTERN = re.compile(rf"\b({'|'.join(sorted(re.escape(w) for w in POSITIVE_WORDS))})\b")
-NEGATIVE_PATTERN = re.compile(rf"\b({'|'.join(sorted(re.escape(w) for w in NEGATIVE_WORDS))})\b")
+POSITIVE_PATTERN = re.compile(rf"\b({'|'.join(re.escape(w) for w in POSITIVE_WORDS)})\b", re.IGNORECASE)
+NEGATIVE_PATTERN = re.compile(rf"\b({'|'.join(re.escape(w) for w in NEGATIVE_WORDS)})\b", re.IGNORECASE)
 
 
 def _sentiment_label(headline: str, summary: str) -> str:
-    text = f"{headline} {summary}".lower()
+    text = f"{headline} {summary}"
     positive = len(POSITIVE_PATTERN.findall(text))
     negative = len(NEGATIVE_PATTERN.findall(text))
     if positive > negative:

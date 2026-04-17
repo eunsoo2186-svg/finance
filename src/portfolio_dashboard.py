@@ -56,7 +56,10 @@ def _average_return_for_held(frame: pd.DataFrame, holdings_payload: dict) -> str
     held["quantity"] = held["ticker"].apply(lambda t: float(holdings_payload.get(t, {}).get("quantity", 0) or 0))
     held["current_value"] = held["current_price"].astype(float) * held["quantity"]
     held["cost"] = held["purchase_price"] * held["quantity"]
-    ret = ((held["current_value"] - held["cost"]) / held["cost"].replace(0, pd.NA)) * 100
+    held = held[held["cost"] > 0]
+    if held.empty:
+        return "N/A"
+    ret = ((held["current_value"] - held["cost"]) / held["cost"]) * 100
     return _format_number(ret.mean())
 
 watchlist_defaults = load_watchlist_tickers()
@@ -306,7 +309,8 @@ news_ticker = st.selectbox("뉴스 조회 종목", portfolio["ticker"].tolist(),
 keyword_filter = st.text_input("뉴스 키워드 필터")
 
 notable_rows = []
-for ticker in portfolio["ticker"].tolist()[:NEWS_SCAN_LIMIT]:
+news_candidates = portfolio.sort_values(["score", "ticker"], ascending=[False, True])["ticker"].tolist()[:NEWS_SCAN_LIMIT]
+for ticker in news_candidates:
     rows = recent_news(ticker, months=2)
     for item in rows[:2]:
         notable_rows.append(
