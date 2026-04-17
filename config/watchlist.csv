@@ -1,0 +1,13 @@
+ticker,company_name,market
+MSFT,Microsoft,NASDAQ
+NVDA,NVIDIA,NASDAQ
+GOOGL,Alphabet,NASDAQ
+TSLA,Tesla,NASDAQ
+RTX,RTX,NYSE
+LMT,Lockheed Martin,NYSE
+NOC,Northrop Grumman,NYSE
+BA,Boeing,NYSE
+005930.KS,Samsung Electronics,KOSPI
+000660.KS,SK hynix,KOSPI
+035420.KS,NAVER,KOSPI
+035720.KQ,Kakao,KOSDAQ
