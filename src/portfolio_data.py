@@ -12,11 +12,13 @@ import pandas as pd
 import requests
 import yfinance as yf
 from dotenv import load_dotenv
+from pandas.errors import EmptyDataError, ParserError
 
 from stock_metadata import DEFAULT_SECTOR_HIERARCHY, metadata_for_ticker
-from watchlist_manager import load_watchlist_tickers
+from watchlist_manager import load_watchlist, load_watchlist_tickers
 
 ENV_PATH = Path(__file__).resolve().parents[1] / "config" / ".env"
+MARKET_DB_PATH = Path(__file__).resolve().parents[1] / "config" / "market_db.csv"
 load_dotenv(ENV_PATH)
 LOGGER = logging.getLogger(__name__)
 KRX_PRICE_LOOKBACK_PERIOD_DAYS = 7
@@ -32,6 +34,95 @@ SECTOR_TICKERS = {
 }
 
 SECTOR_HIERARCHY = DEFAULT_SECTOR_HIERARCHY
+
+
+def _normalize_market_label(raw_exchange: object) -> str:
+    exchange = str(raw_exchange or "").upper().strip()
+    if exchange in {"NMS", "NAS", "NASDAQ", "XNAS"}:
+        return "NASDAQ"
+    if exchange in {"NYQ", "NYS", "NYSE", "XNYS"}:
+        return "NYSE"
+    if "KOSDAQ" in exchange or exchange == "KQ":
+        return "KOSDAQ"
+    if "KOSPI" in exchange or exchange == "KS":
+        return "KOSPI"
+    return exchange if exchange else "UNKNOWN"
+
+
+def _normalize_csv_ticker(raw_ticker: object, exchange: str) -> str:
+    ticker = str(raw_ticker or "").upper().strip()
+    if not ticker:
+        return ""
+    if ticker.endswith(".KS") or ticker.endswith(".KQ"):
+        ticker = ticker.split(".")[0]
+    if exchange in {"KOSPI", "KOSDAQ"} and ticker.isdigit():
+        return ticker.zfill(6)
+    return ticker
+
+
+def _rows_from_market_csv(path: Path) -> List[Dict[str, str]]:
+    if not path.exists():
+        return []
+    try:
+        frame = pd.read_csv(path, dtype={"ticker": str})
+    except (ParserError, EmptyDataError, OSError) as exc:
+        LOGGER.warning("Failed to read market DB CSV at %s (%s): %s", path, exc.__class__.__name__, exc)
+        return []
+    if frame.empty:
+        return []
+
+    if "exchange" not in frame.columns and "market" in frame.columns:
+        frame["exchange"] = frame["market"]
+    if "company_name_en" not in frame.columns and "company_name" in frame.columns:
+        frame["company_name_en"] = frame["company_name"]
+    if "company_name_ko" not in frame.columns:
+        frame["company_name_ko"] = ""
+    if "sector" not in frame.columns:
+        frame["sector"] = "MARKET"
+    if "sub_sector" not in frame.columns:
+        frame["sub_sector"] = "General"
+
+    rows_by_ticker: Dict[str, Dict[str, str]] = {}
+    for row in frame.to_dict(orient="records"):
+        exchange = _normalize_market_label(row.get("exchange", "UNKNOWN"))
+        ticker = _normalize_csv_ticker(row.get("ticker", ""), exchange)
+        if not ticker:
+            continue
+        company_name_ko = str(row.get("company_name_ko", "") or "").strip()
+        company_name_en = str(row.get("company_name_en", "") or "").strip()
+        rows_by_ticker[ticker] = {
+            "ticker": ticker,
+            "company_name_ko": company_name_ko,
+            "company_name_en": company_name_en or ticker,
+            "exchange": exchange,
+            "sector": str(row.get("sector", "MARKET") or "MARKET").strip() or "MARKET",
+            "sub_sector": str(row.get("sub_sector", "General") or "General").strip() or "General",
+        }
+    return list(rows_by_ticker.values())
+
+
+@lru_cache(maxsize=1)
+def load_all_tickers() -> List[Dict[str, str]]:
+    csv_rows = _rows_from_market_csv(MARKET_DB_PATH)
+    if csv_rows:
+        return sorted(csv_rows, key=lambda x: x["ticker"])
+
+    watchlist = load_watchlist()
+    watchlist_rows_by_ticker: Dict[str, Dict[str, str]] = {}
+    for row in watchlist.to_dict(orient="records"):
+        exchange = _normalize_market_label(row.get("exchange", row.get("market", "UNKNOWN")))
+        ticker = _normalize_csv_ticker(row.get("ticker", ""), exchange)
+        if not ticker:
+            continue
+        watchlist_rows_by_ticker[ticker] = {
+            "ticker": ticker,
+            "company_name_ko": str(row.get("company_name_ko", "") or "").strip(),
+            "company_name_en": str(row.get("company_name_en", row.get("company_name", ticker)) or ticker).strip(),
+            "exchange": exchange,
+            "sector": str(row.get("sector", "MARKET") or "MARKET").strip() or "MARKET",
+            "sub_sector": str(row.get("sub_sector", "General") or "General").strip() or "General",
+        }
+    return sorted(watchlist_rows_by_ticker.values(), key=lambda x: x["ticker"])
 
 
 @dataclass(frozen=True)
