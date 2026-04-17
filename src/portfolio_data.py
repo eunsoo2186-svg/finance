@@ -229,6 +229,10 @@ DEFAULT_WEIGHTS: Dict[str, Dict[str, float]] = {
     },
 }
 
+for _sector_name, _weights in DEFAULT_WEIGHTS.items():
+    if round(sum(_weights.values()), 6) != 1.0:
+        LOGGER.warning("DEFAULT_WEIGHTS for %s should sum to 1.0 (actual=%s)", _sector_name, sum(_weights.values()))
+
 
 @lru_cache(maxsize=64)
 def _finnhub_metrics(symbol: str) -> Dict[str, float]:

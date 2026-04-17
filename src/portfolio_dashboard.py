@@ -146,6 +146,7 @@ METRIC_HELP = {
 }
 # Cap API calls per refresh while still surfacing a representative notable-news sample.
 NEWS_SCAN_LIMIT = 20
+# Conservative placeholder for daily drift when no intraday PnL feed is available (~0.2%).
 ESTIMATED_DAILY_CHANGE_RATE = 0.002
 news_agg = NewsAggregator(os.getenv("FINNHUB_API_KEY", ""))
 
