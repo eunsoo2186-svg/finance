@@ -122,10 +122,11 @@ with st.sidebar:
     )
 
     sidebar_options = filtered_tickers if normalized_search else sorted(ticker_label_map.keys())
+    default_selected = [t for t in watchlist_defaults if t in sidebar_options][:30]
     selected = st.multiselect(
         "모니터링 종목 (NASDAQ/NYSE/KOSPI/KOSDAQ)",
         options=sidebar_options,
-        default=[t for t in watchlist_defaults if t in ticker_label_map][:30],
+        default=default_selected,
         format_func=lambda t: ticker_label_map.get(t, t),
     )
 

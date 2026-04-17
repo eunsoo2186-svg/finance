@@ -4,12 +4,14 @@ import argparse
 import io
 import logging
 import time
+from json import JSONDecodeError
 from pathlib import Path
 from typing import Dict, Iterable, List
 
 import pandas as pd
 import requests
 import yfinance as yf
+from watchlist_manager import load_watchlist
 
 try:
     from pykrx import stock  # type: ignore
@@ -23,6 +25,7 @@ LOGGER = logging.getLogger(__name__)
 NASDAQ_LISTED_URL = "https://www.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.txt"
 OTHER_LISTED_URL = "https://www.nasdaqtrader.com/dynamic/SymDir/otherlisted.txt"
 OTHER_LISTED_ACT_SYMBOL_COLUMN = "ACT Symbol"
+DEFAULT_UNKNOWN = "Unknown"
 
 
 def _non_negative_float(raw: str) -> float:
@@ -66,8 +69,8 @@ def _load_nasdaq_rows() -> List[Dict[str, str]]:
                 "company_name_ko": "",
                 "company_name_en": str(row.get("Security Name") or ticker).strip(),
                 "exchange": "NASDAQ",
-                "sector": "",
-                "sub_sector": "",
+                "sector": DEFAULT_UNKNOWN,
+                "sub_sector": DEFAULT_UNKNOWN,
             }
         )
     return out
@@ -90,8 +93,8 @@ def _load_nyse_rows() -> List[Dict[str, str]]:
                 "company_name_ko": "",
                 "company_name_en": str(row.get("Security Name") or ticker).strip(),
                 "exchange": "NYSE",
-                "sector": "",
-                "sub_sector": "",
+                "sector": DEFAULT_UNKNOWN,
+                "sub_sector": DEFAULT_UNKNOWN,
             }
         )
     return out
@@ -101,7 +104,21 @@ def _load_krx_rows(market: str) -> List[Dict[str, str]]:
     if stock is None:
         LOGGER.warning("pykrx is not installed. Skipping %s.", market)
         return []
-    tickers = stock.get_market_ticker_list(market=market)
+    try:
+        tickers = stock.get_market_ticker_list(market=market)
+    except (
+        TypeError,
+        ValueError,
+        KeyError,
+        AttributeError,
+        JSONDecodeError,
+        requests.RequestException,
+    ) as exc:
+        LOGGER.warning("Failed to fetch KRX ticker list for %s: %s", market, exc)
+        return []
+    except Exception as exc:  # pragma: no cover - pykrx can raise non-standard runtime errors
+        LOGGER.warning("Unexpected pykrx failure while loading %s: %s", market, exc)
+        return []
     out: List[Dict[str, str]] = []
     for ticker in tickers:
         try:
@@ -115,11 +132,44 @@ def _load_krx_rows(market: str) -> List[Dict[str, str]]:
                 "company_name_ko": str(name).strip(),
                 "company_name_en": "",
                 "exchange": market.upper(),
-                "sector": "",
-                "sub_sector": "",
+                "sector": DEFAULT_UNKNOWN,
+                "sub_sector": DEFAULT_UNKNOWN,
             }
         )
     return out
+
+
+def _load_watchlist_rows() -> List[Dict[str, str]]:
+    out: List[Dict[str, str]] = []
+    for row in load_watchlist().to_dict(orient="records"):
+        ticker = _clean_us_ticker(row.get("ticker"))
+        exchange = str(row.get("exchange") or row.get("market") or "").upper().strip()
+        if not ticker:
+            continue
+        if exchange in {"KOSPI", "KOSDAQ"} and ticker.isdigit():
+            ticker = ticker.zfill(6)
+        out.append(
+            {
+                "ticker": ticker,
+                "company_name_ko": str(row.get("company_name_ko") or "").strip(),
+                "company_name_en": str(row.get("company_name_en") or row.get("company_name") or ticker).strip(),
+                "exchange": exchange or "UNKNOWN",
+                "sector": str(row.get("sector") or DEFAULT_UNKNOWN).strip() or DEFAULT_UNKNOWN,
+                "sub_sector": str(row.get("sub_sector") or DEFAULT_UNKNOWN).strip() or DEFAULT_UNKNOWN,
+            }
+        )
+    return out
+
+
+def _collect_rows(stage_name: str, loader) -> List[Dict[str, str]]:
+    LOGGER.info("📥 %s 종목 수집 중...", stage_name)
+    try:
+        rows = loader()
+    except Exception as exc:  # pragma: no cover - defensive catch for unstable external APIs
+        LOGGER.warning("%s 수집 실패: %s", stage_name, exc)
+        rows = []
+    LOGGER.info("  ✅ %s: %s개", stage_name, len(rows))
+    return rows
 
 
 def _enrich_sectors(rows: Iterable[Dict[str, str]], delay_seconds: float) -> List[Dict[str, str]]:
@@ -147,11 +197,28 @@ def _enrich_sectors(rows: Iterable[Dict[str, str]], delay_seconds: float) -> Lis
 def build_market_db(output_path: Path, enrich_sectors: bool, delay_seconds: float) -> pd.DataFrame:
     merged: Dict[str, Dict[str, str]] = {}
 
-    for row in _load_nasdaq_rows() + _load_nyse_rows() + _load_krx_rows("KOSPI") + _load_krx_rows("KOSDAQ"):
+    all_rows = (
+        _collect_rows("NASDAQ", _load_nasdaq_rows)
+        + _collect_rows("NYSE", _load_nyse_rows)
+        + _collect_rows("KOSPI", lambda: _load_krx_rows("KOSPI"))
+        + _collect_rows("KOSDAQ", lambda: _load_krx_rows("KOSDAQ"))
+        + _collect_rows("WATCHLIST fallback", _load_watchlist_rows)
+    )
+
+    for row in all_rows:
         ticker = str(row.get("ticker", "")).upper().strip()
         if not ticker:
             continue
-        merged[ticker] = row
+        if ticker not in merged:
+            merged[ticker] = row
+            continue
+        current = merged[ticker]
+        for key in ("company_name_ko", "company_name_en", "exchange", "sector", "sub_sector"):
+            existing = str(current.get(key, "") or "").strip()
+            incoming = str(row.get(key, "") or "").strip()
+            if not existing or existing.upper() == DEFAULT_UNKNOWN.upper():
+                if incoming:
+                    current[key] = incoming
 
     rows = list(merged.values())
     if enrich_sectors:
@@ -165,6 +232,8 @@ def build_market_db(output_path: Path, enrich_sectors: bool, delay_seconds: floa
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     frame.to_csv(output_path, index=False, encoding="utf-8-sig")
+    LOGGER.info("\n✅ 완료! 총 %s개 종목", len(frame))
+    LOGGER.info("📁 저장: %s", output_path)
     return frame
 
 
