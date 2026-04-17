@@ -5,9 +5,8 @@ import plotly.express as px
 import streamlit as st
 
 from ai_analysis import blended_signal_score, recommendation_from_score
-from market_tickers import load_market_tickers
 from news_aggregator import extract_keywords, recent_news
-from portfolio_data import DEFAULT_WEIGHTS, METRIC_SPECS, build_portfolio_dataframe, metric_basis_table
+from portfolio_data import DEFAULT_WEIGHTS, METRIC_SPECS, build_portfolio_dataframe, load_all_tickers, metric_basis_table
 from watchlist_manager import load_favorites, load_holdings, load_notes, load_watchlist_tickers, save_favorites, save_holdings, save_notes
 
 st.set_page_config(page_title="Portfolio Dashboard", page_icon="📊", layout="wide")
@@ -63,10 +62,10 @@ def _average_return_for_held(frame: pd.DataFrame, holdings_payload: dict) -> str
     return _format_number(ret.mean())
 
 watchlist_defaults = load_watchlist_tickers()
-market_rows = load_market_tickers()
+market_rows = load_all_tickers()
 ticker_meta_map = {row["ticker"]: row for row in market_rows}
 ticker_label_map = {
-    row["ticker"]: f"{(row.get('company_name_ko') or row.get('company_name_en') or row.get('company_name') or row['ticker'])} ({row['ticker']}) [{row.get('market', 'UNKNOWN')}]"
+    row["ticker"]: f"{(row.get('company_name_ko') or row.get('company_name_en') or row.get('company_name') or row['ticker'])} ({row['ticker']}) [{row.get('exchange') or row.get('market', 'UNKNOWN')}]"
     for row in market_rows
 }
 
