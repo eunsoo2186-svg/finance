@@ -12,6 +12,7 @@ import pandas as pd
 import requests
 import yfinance as yf
 from dotenv import load_dotenv
+from pandas.errors import EmptyDataError, ParserError
 
 from stock_metadata import DEFAULT_SECTOR_HIERARCHY, metadata_for_ticker
 from watchlist_manager import load_watchlist, load_watchlist_tickers
@@ -45,17 +46,17 @@ def _normalize_market_label(raw_exchange: object) -> str:
         return "KOSDAQ"
     if "KOSPI" in exchange or exchange == "KS":
         return "KOSPI"
-    return exchange or "UNKNOWN"
+    return exchange if exchange else "UNKNOWN"
 
 
 def _normalize_csv_ticker(raw_ticker: object, exchange: str) -> str:
     ticker = str(raw_ticker or "").upper().strip()
     if not ticker:
         return ""
+    if ticker.endswith(".KS") or ticker.endswith(".KQ"):
+        ticker = ticker.split(".")[0]
     if exchange in {"KOSPI", "KOSDAQ"} and ticker.isdigit():
         return ticker.zfill(6)
-    if ticker.endswith(".KS") or ticker.endswith(".KQ"):
-        return ticker.split(".")[0]
     return ticker
 
 
@@ -64,8 +65,8 @@ def _rows_from_market_csv(path: Path) -> List[Dict[str, str]]:
         return []
     try:
         frame = pd.read_csv(path, dtype={"ticker": str})
-    except Exception:
-        LOGGER.warning("Failed to read market DB CSV at %s", path)
+    except (ParserError, EmptyDataError, OSError) as exc:
+        LOGGER.warning("Failed to read market DB CSV at %s (%s): %s", path, exc.__class__.__name__, exc)
         return []
     if frame.empty:
         return []
@@ -81,7 +82,7 @@ def _rows_from_market_csv(path: Path) -> List[Dict[str, str]]:
     if "sub_sector" not in frame.columns:
         frame["sub_sector"] = "General"
 
-    rows: Dict[str, Dict[str, str]] = {}
+    rows_by_ticker: Dict[str, Dict[str, str]] = {}
     for row in frame.to_dict(orient="records"):
         exchange = _normalize_market_label(row.get("exchange", "UNKNOWN"))
         ticker = _normalize_csv_ticker(row.get("ticker", ""), exchange)
@@ -89,7 +90,7 @@ def _rows_from_market_csv(path: Path) -> List[Dict[str, str]]:
             continue
         company_name_ko = str(row.get("company_name_ko", "") or "").strip()
         company_name_en = str(row.get("company_name_en", "") or "").strip()
-        rows[ticker] = {
+        rows_by_ticker[ticker] = {
             "ticker": ticker,
             "company_name_ko": company_name_ko,
             "company_name_en": company_name_en or ticker,
@@ -97,7 +98,7 @@ def _rows_from_market_csv(path: Path) -> List[Dict[str, str]]:
             "sector": str(row.get("sector", "MARKET") or "MARKET").strip() or "MARKET",
             "sub_sector": str(row.get("sub_sector", "General") or "General").strip() or "General",
         }
-    return list(rows.values())
+    return list(rows_by_ticker.values())
 
 
 @lru_cache(maxsize=1)
@@ -107,13 +108,13 @@ def load_all_tickers() -> List[Dict[str, str]]:
         return sorted(csv_rows, key=lambda x: x["ticker"])
 
     watchlist = load_watchlist()
-    out: Dict[str, Dict[str, str]] = {}
+    watchlist_rows_by_ticker: Dict[str, Dict[str, str]] = {}
     for row in watchlist.to_dict(orient="records"):
         exchange = _normalize_market_label(row.get("exchange", row.get("market", "UNKNOWN")))
         ticker = _normalize_csv_ticker(row.get("ticker", ""), exchange)
         if not ticker:
             continue
-        out[ticker] = {
+        watchlist_rows_by_ticker[ticker] = {
             "ticker": ticker,
             "company_name_ko": str(row.get("company_name_ko", "") or "").strip(),
             "company_name_en": str(row.get("company_name_en", row.get("company_name", ticker)) or ticker).strip(),
@@ -121,7 +122,7 @@ def load_all_tickers() -> List[Dict[str, str]]:
             "sector": str(row.get("sector", "MARKET") or "MARKET").strip() or "MARKET",
             "sub_sector": str(row.get("sub_sector", "General") or "General").strip() or "General",
         }
-    return sorted(out.values(), key=lambda x: x["ticker"])
+    return sorted(watchlist_rows_by_ticker.values(), key=lambda x: x["ticker"])
 
 
 @dataclass(frozen=True)

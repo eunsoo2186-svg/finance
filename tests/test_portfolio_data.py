@@ -63,9 +63,25 @@ class PortfolioDataTests(unittest.TestCase):
                 load_all_tickers.cache_clear()
                 rows = load_all_tickers()
                 load_all_tickers.cache_clear()
-        self.assertEqual(rows[0]["ticker"], "005930")
-        self.assertEqual(rows[1]["exchange"], "NASDAQ")
-        self.assertEqual(rows[0]["company_name_ko"], "삼성전자")
+        row_map = {row["ticker"]: row for row in rows}
+        self.assertIn("005930", row_map)
+        self.assertIn("MSFT", row_map)
+        self.assertEqual(row_map["MSFT"]["exchange"], "NASDAQ")
+        self.assertEqual(row_map["005930"]["company_name_ko"], "삼성전자")
+
+    def test_load_all_tickers_normalizes_krx_suffix_and_padding(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            csv_path = Path(tmp_dir) / "market_db.csv"
+            csv_path.write_text(
+                "ticker,company_name_ko,company_name_en,exchange,sector,sub_sector\n"
+                "930.KS,삼성전자,Samsung Electronics,KOSPI,Technology,Semiconductors\n",
+                encoding="utf-8",
+            )
+            with patch("portfolio_data.MARKET_DB_PATH", csv_path):
+                load_all_tickers.cache_clear()
+                rows = load_all_tickers()
+                load_all_tickers.cache_clear()
+        self.assertEqual(rows[0]["ticker"], "000930")
 
     @patch("portfolio_data._rows_from_market_csv", return_value=[])
     @patch(
@@ -74,7 +90,7 @@ class PortfolioDataTests(unittest.TestCase):
             [{"ticker": "AAPL", "company_name_en": "Apple", "exchange": "NASDAQ", "sector": "Technology", "sub_sector": "Consumer Electronics"}]
         ),
     )
-    def test_load_all_tickers_falls_back_to_watchlist(self, *_):
+    def test_load_all_tickers_falls_back_to_watchlist(self, mock_load_watchlist, mock_rows_from_market_csv):
         load_all_tickers.cache_clear()
         rows = load_all_tickers()
         load_all_tickers.cache_clear()

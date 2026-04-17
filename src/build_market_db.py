@@ -13,7 +13,7 @@ import yfinance as yf
 
 try:
     from pykrx import stock  # type: ignore
-except Exception:  # pragma: no cover - optional dependency
+except ImportError:  # pragma: no cover - optional dependency
     stock = None
 
 
@@ -22,6 +22,11 @@ DEFAULT_OUTPUT_PATH = ROOT / "config" / "market_db.csv"
 LOGGER = logging.getLogger(__name__)
 NASDAQ_LISTED_URL = "https://www.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.txt"
 OTHER_LISTED_URL = "https://www.nasdaqtrader.com/dynamic/SymDir/otherlisted.txt"
+OTHER_LISTED_ACT_SYMBOL_COLUMN = "ACT Symbol"
+
+
+def _non_negative_float(raw: str) -> float:
+    return max(0.0, float(raw))
 
 
 def _read_pipe_separated(url: str) -> pd.DataFrame:
@@ -76,7 +81,7 @@ def _load_nyse_rows() -> List[Dict[str, str]]:
     for row in frame.to_dict(orient="records"):
         if str(row.get("Exchange") or "").strip().upper() != "N":
             continue
-        ticker = _clean_us_ticker(row.get("ACT Symbol"))
+        ticker = _clean_us_ticker(row.get(OTHER_LISTED_ACT_SYMBOL_COLUMN))
         if not ticker:
             continue
         out.append(
@@ -101,7 +106,8 @@ def _load_krx_rows(market: str) -> List[Dict[str, str]]:
     for ticker in tickers:
         try:
             name = stock.get_market_ticker_name(ticker) or ticker
-        except Exception:
+        except (TypeError, ValueError) as exc:
+            LOGGER.warning("Failed to resolve KRX ticker name for %s (%s): %s", ticker, market, exc)
             continue
         out.append(
             {
@@ -125,8 +131,10 @@ def _enrich_sectors(rows: Iterable[Dict[str, str]], delay_seconds: float) -> Lis
             continue
         ticker = str(row.get("ticker", "")).upper()
         try:
+            # yfinance may intermittently return malformed payloads depending on symbol/state.
             info = yf.Ticker(ticker).info or {}
-        except Exception:
+        except (KeyError, TypeError, ValueError, AttributeError, requests.RequestException) as exc:
+            LOGGER.warning("Failed to fetch yfinance info for %s: %s", ticker, exc)
             info = {}
         row["sector"] = str(info.get("sector") or row.get("sector") or "").strip()
         row["sub_sector"] = str(info.get("industry") or row.get("sub_sector") or "").strip()
@@ -164,17 +172,17 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Build unified market DB CSV for NASDAQ/NYSE/KOSPI/KOSDAQ.")
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT_PATH, help="Output CSV path")
     parser.add_argument("--enrich-sectors", action="store_true", help="Fetch sector/sub-sector from yfinance info")
-    parser.add_argument("--delay-seconds", type=float, default=0.1, help="Delay between yfinance info calls")
+    parser.add_argument("--delay-seconds", type=_non_negative_float, default=0.1, help="Delay between yfinance info calls")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    frame = build_market_db(args.output, enrich_sectors=args.enrich_sectors, delay_seconds=max(0.0, args.delay_seconds))
+    frame = build_market_db(args.output, enrich_sectors=args.enrich_sectors, delay_seconds=args.delay_seconds)
     counts = frame["exchange"].value_counts().to_dict() if not frame.empty else {}
     LOGGER.info("✅ NASDAQ: %s", counts.get("NASDAQ", 0))
     LOGGER.info("✅ NYSE: %s", counts.get("NYSE", 0))
     LOGGER.info("✅ KOSPI: %s", counts.get("KOSPI", 0))
     LOGGER.info("✅ KOSDAQ: %s", counts.get("KOSDAQ", 0))
-    LOGGER.info("총 %s 종목 DB 구축 완료! -> %s", len(frame), args.output)
+    LOGGER.info("Total %s tickers in market DB -> %s", len(frame), args.output)
 
 
 if __name__ == "__main__":
