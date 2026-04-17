@@ -1,13 +1,81 @@
-ticker,company_name,market
-MSFT,Microsoft,NASDAQ
-NVDA,NVIDIA,NASDAQ
-GOOGL,Alphabet,NASDAQ
-TSLA,Tesla,NASDAQ
-RTX,RTX,NYSE
-LMT,Lockheed Martin,NYSE
-NOC,Northrop Grumman,NYSE
-BA,Boeing,NYSE
-005930.KS,Samsung Electronics,KOSPI
-000660.KS,SK hynix,KOSPI
-035420.KS,NAVER,KOSPI
-035720.KQ,Kakao,KOSDAQ
+ticker,company_name_ko,company_name_en,exchange,sector,sub_sector
+ALM,알몬티,Almonty,NYSE,Materials,Tungsten
+APP,앱러빈,AppLovin,NASDAQ,Technology,Software
+ASTS,ASTS,AST SpaceMobile,NASDAQ,Communication Services,Satellite
+AVGO,브로드컴,Broadcom,NASDAQ,Technology,Semiconductors
+CCJ,카메코,Cameco,NYSE,Energy,Uranium
+COHR,코히런트,Coherent,NYSE,Technology,Optoelectronics
+COIN,코인베이스,Coinbase,NASDAQ,Financial,Crypto Exchange
+CRDO,크레도,Credo Technology,NASDAQ,Technology,Semiconductors
+CRML,크리티컬 메탈스,Critical Metals,NYSE,Materials,Metals & Mining
+ETHU,ETHU ETF,ETHU ETF,NYSE,ETF,Crypto
+GILT,길라트,Gilat,NASDAQ,Communication Services,Satellite
+GLD,SPDR 금 ETF,SPDR Gold Shares,NYSE,ETF,Commodities
+IREN,아이렌,IREN,NASDAQ,Technology,Digital Infrastructure
+JOBY,조비 에비에이션,Joby Aviation,NYSE,Industrials,Aerospace
+KO,코카콜라,Coca-Cola,NYSE,Consumer Defensive,Beverages
+LAC,리튬 아메리카스,Lithium Americas,NYSE,Materials,Lithium
+LLY,일라이 릴리,Eli Lilly,NYSE,Healthcare,Pharmaceuticals
+LUNR,인튜이티브 머신스,Intuitive Machines,NASDAQ,Industrials,Space
+META,메타,Meta,NASDAQ,Communication Services,Internet Content
+MP,MP 머터리얼즈,MP Materials,NYSE,Materials,Rare Earth
+MRVL,마벨,Marvell,NASDAQ,Technology,Semiconductors
+MSFT,마이크로소프트,Microsoft,NASDAQ,Technology,Software
+MU,마이크론,Micron,NASDAQ,Technology,Semiconductors
+NB,니오코프,NioCorp,NASDAQ,Materials,Rare Earth
+NVDA,엔비디아,NVIDIA,NASDAQ,Technology,Semiconductors
+ORCL,오라클,Oracle,NYSE,Technology,Software
+PLTR,팔란티어,Palantir,NASDAQ,Technology,Software
+RDW,레드와이어,Redwire,NYSE,Industrials,Space Infrastructure
+RIO,리오 틴토 ADR,Rio Tinto ADR,NYSE,Materials,Metals & Mining
+RKLB,로켓 랩,Rocket Lab,NASDAQ,Industrials,Space
+SCHD,SCHD ETF,SCHD ETF,NYSE,ETF,Dividend
+SNDK,샌디스크,SanDisk,NASDAQ,Technology,Storage
+TSLA,테슬라,Tesla,NASDAQ,Consumer Cyclical,Electric Vehicles
+TSM,TSMC,TSMC,NYSE,Technology,Semiconductors
+UCTT,울트라 클린 홀딩스,Ultra Clean Holdings,NASDAQ,Technology,Semiconductor Equipment
+VRT,버티브 홀딩스,Vertiv,NYSE,Industrials,Electrical Equipment
+VSAT,비아샛,Viasat,NASDAQ,Communication Services,Satellite
+WDC,웨스턴 디지털,Western Digital,NASDAQ,Technology,Storage
+000660,SK하이닉스,SK hynix,KOSPI,Technology,Semiconductors
+000810,삼성화재,Samsung Fire & Marine,KOSPI,Financial,Insurance
+000880,한화,Hanwha,KOSPI,Industrials,Conglomerate
+001440,대한전선,Taihan Cable,KOSPI,Industrials,Electrical Equipment
+004990,롯데지주,Lotte Corp,KOSPI,Consumer Cyclical,Conglomerate
+005490,POSCO홀딩스,POSCO Holdings,KOSPI,Materials,Steel
+005880,대한해운,Korea Line,KOSPI,Industrials,Marine Transport
+005930,삼성전자,Samsung Electronics,KOSPI,Technology,Semiconductors
+006360,GS건설,GS E&C,KOSPI,Industrials,Construction
+006800,미래에셋증권,Mirae Asset Securities,KOSPI,Financial,Capital Markets
+009150,삼성전기,Samsung Electro-Mechanics,KOSPI,Technology,Electronic Components
+009830,한화솔루션,Hanwha Solutions,KOSPI,Materials,Chemicals
+010120,LS ELECTRIC,LS ELECTRIC,KOSPI,Industrials,Electrical Equipment
+010130,고려아연,Korea Zinc,KOSPI,Materials,Metals
+010140,삼성중공업,Samsung Heavy Industries,KOSPI,Industrials,Shipbuilding
+012450,한화에어로스페이스,Hanwha Aerospace,KOSPI,Industrials,Aerospace & Defense
+015760,한국전력,Korea Electric Power,KOSPI,Utilities,Electric Utilities
+017670,SK텔레콤,SK Telecom,KOSPI,Communication Services,Telecom
+032640,LG유플러스,LG Uplus,KOSPI,Communication Services,Telecom
+032830,삼성생명,Samsung Life Insurance,KOSPI,Financial,Insurance
+034730,SK,SK Inc.,KOSPI,Industrials,Conglomerate
+035420,NAVER,NAVER,KOSPI,Communication Services,Internet Content
+042660,한화오션,Hanwha Ocean,KOSPI,Industrials,Shipbuilding
+047040,대우건설,Daewoo E&C,KOSPI,Industrials,Construction
+047120,오르비텍,Orbitech,KOSDAQ,Industrials,Aerospace
+047810,한국항공우주,Korea Aerospace Industries,KOSPI,Industrials,Aerospace & Defense
+058470,리노공업,Leeno Industrial,KOSDAQ,Technology,Semiconductor Equipment
+079550,LIG넥스원,LIG Nex1,KOSPI,Industrials,Defense
+086790,하나금융지주,Hana Financial Group,KOSPI,Financial,Banks
+100090,SK오션플랜트,SK Oceanplant,KOSPI,Industrials,Offshore
+117700,KODEX 건설,KODEX Construction,KOSPI,ETF,Construction
+119850,지엔씨에너지,GnC Energy,KOSDAQ,Utilities,Independent Power
+125490,한라캐스트,Halla Cast,KOSDAQ,Industrials,Auto Parts
+178320,서진시스템,Seojin System,KOSDAQ,Technology,Electronic Equipment
+229640,LS에코에너지,LS Eco Energy,KOSPI,Industrials,Energy Equipment
+298020,효성티앤씨,Hyosung TNC,KOSPI,Materials,Textiles
+298040,효성중공업,Hyosung Heavy Industries,KOSPI,Industrials,Heavy Electrical
+352820,하이브,HYBE,KOSPI,Communication Services,Entertainment
+411060,ACE KRX금현물,ACE KRX Gold Spot,KOSPI,ETF,Commodities
+449450,PLUS K방산,PLUS K-Defense,KOSPI,ETF,Defense
+466100,클로봇,Clobot,KOSDAQ,Technology,Robotics
+475150,SK이터닉스,SK Eternix,KOSPI,Industrials,Energy

@@ -13,6 +13,31 @@ FAVORITES_PATH = ROOT / "config" / "favorites.json"
 NOTES_PATH = ROOT / "config" / "notes.json"
 HOLDINGS_PATH = ROOT / "config" / "holdings.json"
 LOGGER = logging.getLogger(__name__)
+WATCHLIST_COLUMNS = [
+    "ticker",
+    "company_name",
+    "company_name_ko",
+    "company_name_en",
+    "market",
+    "exchange",
+    "sector",
+    "sub_sector",
+]
+
+
+def _normalize_ticker(raw: str) -> str:
+    ticker = str(raw or "").upper().strip()
+    if ticker.endswith(".KS") or ticker.endswith(".KQ"):
+        return ticker.split(".")[0]
+    return ticker
+
+
+def _select_display_name(company_name_ko: str, company_name_en: str, ticker: str) -> str:
+    if company_name_ko:
+        return company_name_ko
+    if company_name_en:
+        return company_name_en
+    return ticker
 
 
 def _read_json(path: Path) -> Dict[str, Any]:
@@ -34,33 +59,62 @@ def load_watchlist() -> pd.DataFrame:
     if not WATCHLIST_PATH.exists():
         default = pd.DataFrame(
             [
-                {"ticker": "MSFT", "company_name": "Microsoft", "market": "NASDAQ"},
-                {"ticker": "NVDA", "company_name": "NVIDIA", "market": "NASDAQ"},
-                {"ticker": "GOOGL", "company_name": "Alphabet", "market": "NASDAQ"},
-                {"ticker": "TSLA", "company_name": "Tesla", "market": "NASDAQ"},
-                {"ticker": "RTX", "company_name": "RTX", "market": "NYSE"},
-                {"ticker": "LMT", "company_name": "Lockheed Martin", "market": "NYSE"},
-                {"ticker": "NOC", "company_name": "Northrop Grumman", "market": "NYSE"},
-                {"ticker": "BA", "company_name": "Boeing", "market": "NYSE"},
+                {
+                    "ticker": "MSFT",
+                    "company_name_ko": "마이크로소프트",
+                    "company_name_en": "Microsoft",
+                    "exchange": "NASDAQ",
+                    "sector": "Technology",
+                    "sub_sector": "Software",
+                },
+                {
+                    "ticker": "TSLA",
+                    "company_name_ko": "테슬라",
+                    "company_name_en": "Tesla",
+                    "exchange": "NASDAQ",
+                    "sector": "Technology",
+                    "sub_sector": "Electric Vehicles",
+                },
             ]
         )
         WATCHLIST_PATH.parent.mkdir(parents=True, exist_ok=True)
         default.to_csv(WATCHLIST_PATH, index=False)
-        return default
+        return load_watchlist()
 
     df = pd.read_csv(WATCHLIST_PATH)
     if "ticker" not in df.columns:
-        return pd.DataFrame(columns=["ticker", "company_name", "market"])
+        return pd.DataFrame(columns=WATCHLIST_COLUMNS)
 
-    if "company_name" not in df.columns:
-        df["company_name"] = df["ticker"]
-    if "market" not in df.columns:
-        df["market"] = "UNKNOWN"
+    if "exchange" not in df.columns and "market" in df.columns:
+        df["exchange"] = df["market"]
+    if "company_name_en" not in df.columns and "company_name" in df.columns:
+        df["company_name_en"] = df["company_name"]
+    if "company_name_ko" not in df.columns:
+        df["company_name_ko"] = ""
 
-    df["ticker"] = df["ticker"].astype(str).str.upper().str.strip()
-    df["company_name"] = df["company_name"].astype(str).str.strip()
-    df["market"] = df["market"].astype(str).str.upper().str.strip()
-    return df[["ticker", "company_name", "market"]].dropna(subset=["ticker"]).drop_duplicates(subset=["ticker"])
+    df["ticker"] = df["ticker"].apply(_normalize_ticker)
+    df["company_name_ko"] = df["company_name_ko"].fillna("").astype(str).str.strip()
+    df["company_name_en"] = df["company_name_en"].fillna("").astype(str).str.strip()
+    df["exchange"] = df["exchange"].fillna("UNKNOWN").astype(str).str.upper().str.strip()
+    df["market"] = df["exchange"]
+    df["company_name"] = [
+        _select_display_name(ko, en, ticker)
+        for ko, en, ticker in zip(df["company_name_ko"], df["company_name_en"], df["ticker"])
+    ]
+    if "sector" not in df.columns:
+        df["sector"] = "MARKET"
+    if "sub_sector" not in df.columns:
+        df["sub_sector"] = "General"
+    df["sector"] = df["sector"].fillna("MARKET").astype(str).str.strip()
+    df["sub_sector"] = df["sub_sector"].fillna("General").astype(str).str.strip()
+
+    return (
+        df[WATCHLIST_COLUMNS]
+        .dropna(subset=["ticker"])
+        .drop_duplicates(subset=["ticker"])
+        .sort_values("ticker")
+        .reset_index(drop=True)
+    )
 
 
 def load_watchlist_tickers() -> List[str]:
@@ -102,6 +156,7 @@ def load_holdings() -> Dict[str, Dict[str, Any]]:
             "purchase_price": float(payload.get("purchase_price", 0) or 0),
             "quantity": float(payload.get("quantity", 0) or 0),
             "currency": str(payload.get("currency", "USD") or "USD"),
+            "target_price": float(payload.get("target_price", 0) or 0),
         }
     return out
 
