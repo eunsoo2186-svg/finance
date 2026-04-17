@@ -146,6 +146,7 @@ METRIC_HELP = {
 }
 # Cap API calls per refresh while still surfacing a representative notable-news sample.
 NEWS_SCAN_LIMIT = 20
+ESTIMATED_DAILY_CHANGE_RATE = 0.002
 news_agg = NewsAggregator(os.getenv("FINNHUB_API_KEY", ""))
 
 
@@ -283,7 +284,12 @@ with col2:
 with col3:
     st.metric("수익률", f"{total_return:+.1f}%")
 with col4:
-    st.metric("일일 변화(추정)", f"{_format_currency(total_value * 0.002)}원", delta=f"{0.2:+.1f}%")
+    estimated_daily_change_pct = ESTIMATED_DAILY_CHANGE_RATE * 100
+    st.metric(
+        "일일 변화(추정)",
+        f"{_format_currency(total_value * ESTIMATED_DAILY_CHANGE_RATE)}원",
+        delta=f"{estimated_daily_change_pct:+.1f}%",
+    )
 
 st.subheader("보유 정보 입력")
 held_selection = st.multiselect(
@@ -437,18 +443,18 @@ try:
                 "보유수량": "{:.2f}",
                 "현재가": _format_currency,
                 "평가손익": _format_currency,
-                "수익률(%)": "{:+.1f}%",
+                "수익률(%)": lambda v: "-" if pd.isna(v) else f"{float(v):+.1f}%",
                 "스코어": "{:.2f}",
                 "P/E": "{:.2f}",
                 "PEG": "{:.2f}",
-                "Revenue Growth(%)": "{:.1f}%",
-                "R&D Ratio(%)": "{:.1f}%",
+                "Revenue Growth(%)": lambda v: "-" if pd.isna(v) else f"{float(v):.1f}%",
+                "R&D Ratio(%)": lambda v: "-" if pd.isna(v) else f"{float(v):.1f}%",
                 "Asset Turnover": "{:.2f}",
                 "Tech Cycle": "{:.2f}",
                 "P/B": "{:.2f}",
-                "Operating Margin(%)": "{:.1f}%",
-                "Debt Ratio(%)": "{:.1f}%",
-                "Dividend Yield(%)": "{:.1f}%",
+                "Operating Margin(%)": lambda v: "-" if pd.isna(v) else f"{float(v):.1f}%",
+                "Debt Ratio(%)": lambda v: "-" if pd.isna(v) else f"{float(v):.1f}%",
+                "Dividend Yield(%)": lambda v: "-" if pd.isna(v) else f"{float(v):.1f}%",
                 "Backlog Proxy": "{:.2f}",
                 "Gov Cycle": "{:.2f}",
             },
