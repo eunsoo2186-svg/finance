@@ -109,7 +109,7 @@ def _load_nyse_rows() -> List[Dict[str, str]]:
 def _load_krx_rows(market: str) -> List[Dict[str, str]]:
     if stock is None:
         LOGGER.warning("pykrx is not installed. Skipping %s.", market)
-        return []
+        return _load_krx_rows_from_cache(market)
     try:
         tickers = stock.get_market_ticker_list(market=market)
     except (
@@ -121,10 +121,10 @@ def _load_krx_rows(market: str) -> List[Dict[str, str]]:
         requests.RequestException,
     ) as exc:
         LOGGER.warning("Failed to fetch KRX ticker list for %s: %s", market, exc)
-        return []
+        return _load_krx_rows_from_cache(market)
     except Exception as exc:  # pragma: no cover - pykrx can raise non-standard runtime errors
         LOGGER.warning("Unexpected pykrx failure while loading %s: %s", market, exc)
-        return []
+        return _load_krx_rows_from_cache(market)
     out: List[Dict[str, str]] = []
     for ticker in tickers:
         try:
@@ -142,7 +142,9 @@ def _load_krx_rows(market: str) -> List[Dict[str, str]]:
                 "sub_sector": DEFAULT_UNKNOWN,
             }
         )
-    return out
+    if out:
+        return out
+    return _load_krx_rows_from_cache(market)
 
 
 def _normalize_krx_market(raw: object) -> str:
@@ -154,8 +156,9 @@ def _normalize_krx_market(raw: object) -> str:
 
 def _load_krx_rows_from_cache(market: str) -> List[Dict[str, str]]:
     normalized_market = market.upper().strip()
+    base_date = datetime.now(timezone.utc)
     for offset in range(KRX_DESC_CACHE_LOOKBACK_DAYS + 1):
-        target_date = (datetime.now(timezone.utc) - timedelta(days=offset)).strftime("%Y-%m-%d")
+        target_date = (base_date - timedelta(days=offset)).strftime("%Y-%m-%d")
         url = KRX_DESC_CACHE_URL_TEMPLATE.format(date=target_date)
         try:
             frame = pd.read_csv(url, dtype={"Code": str})
@@ -261,8 +264,6 @@ def build_market_db(output_path: Path, enrich_sectors: bool, delay_seconds: floa
         + _collect_rows("NYSE", _load_nyse_rows)
         + _collect_rows("KOSPI", lambda: _load_krx_rows("KOSPI"))
         + _collect_rows("KOSDAQ", lambda: _load_krx_rows("KOSDAQ"))
-        + _collect_rows("KOSPI fallback cache", lambda: _load_krx_rows_from_cache("KOSPI"))
-        + _collect_rows("KOSDAQ fallback cache", lambda: _load_krx_rows_from_cache("KOSDAQ"))
         + _collect_rows("WATCHLIST fallback", _load_watchlist_rows)
     )
 

@@ -14,7 +14,8 @@ import build_market_db
 
 
 class BuildMarketDbTests(unittest.TestCase):
-    def test_load_krx_rows_returns_empty_on_pykrx_failure(self):
+    @patch("build_market_db._load_krx_rows_from_cache", return_value=[])
+    def test_load_krx_rows_returns_empty_on_pykrx_failure(self, *_):
         fake_stock = MagicMock()
         fake_stock.get_market_ticker_list.side_effect = requests.ConnectionError("krx down")
         with patch.object(build_market_db, "stock", fake_stock):
@@ -24,7 +25,6 @@ class BuildMarketDbTests(unittest.TestCase):
     @patch("build_market_db._load_nasdaq_rows", side_effect=RuntimeError("nasdaq fail"))
     @patch("build_market_db._load_nyse_rows", return_value=[])
     @patch("build_market_db._load_krx_rows", return_value=[])
-    @patch("build_market_db._load_krx_rows_from_cache", return_value=[])
     @patch(
         "build_market_db.load_watchlist",
         return_value=pd.DataFrame(
@@ -52,9 +52,8 @@ class BuildMarketDbTests(unittest.TestCase):
             self.assertEqual(row["sector"], "Technology")
             self.assertEqual(row["sub_sector"], "Semiconductors")
 
-    @patch("build_market_db._load_nasdaq_rows", return_value=[])
+    @patch("build_market_db._load_nasdaq_rows", side_effect=RuntimeError("nasdaq fail"))
     @patch("build_market_db._load_nyse_rows", return_value=[])
-    @patch("build_market_db._load_krx_rows", return_value=[])
     @patch(
         "build_market_db._load_krx_rows_from_cache",
         side_effect=[
@@ -80,11 +79,14 @@ class BuildMarketDbTests(unittest.TestCase):
             ],
         ],
     )
-    @patch("build_market_db.load_watchlist", return_value=pd.DataFrame([]))
+    @patch("build_market_db.load_watchlist", return_value=pd.DataFrame())
     def test_build_market_db_uses_krx_cache_fallback(self, *_):
+        fake_stock = MagicMock()
+        fake_stock.get_market_ticker_list.side_effect = requests.ConnectionError("krx down")
         with tempfile.TemporaryDirectory() as tmp_dir:
             output_path = Path(tmp_dir) / "market_db.csv"
-            frame = build_market_db.build_market_db(output_path, enrich_sectors=False, delay_seconds=0.0)
+            with patch.object(build_market_db, "stock", fake_stock):
+                frame = build_market_db.build_market_db(output_path, enrich_sectors=False, delay_seconds=0.0)
 
             self.assertEqual(len(frame), 2)
             self.assertSetEqual(set(frame["exchange"].tolist()), {"KOSPI", "KOSDAQ"})
