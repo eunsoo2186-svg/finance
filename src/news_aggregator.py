@@ -28,6 +28,8 @@ SECTOR_NEWS_SYMBOLS = {
     "Consumer Defensive": ["KO", "PG", "WMT"],
     "Consumer Cyclical": ["TSLA", "AMZN", "HD"],
 }
+MAX_SECTOR_NEWS_SYMBOLS = 3
+FINNHUB_REQUEST_TIMEOUT = 8
 
 
 def _sentiment_label(headline: str, summary: str) -> str:
@@ -62,7 +64,7 @@ class NewsAggregator:
                     "to": to_date,
                     "token": self.finnhub_key,
                 },
-                timeout=8,
+                timeout=FINNHUB_REQUEST_TIMEOUT,
             )
             response.raise_for_status()
             data = response.json()
@@ -82,7 +84,7 @@ class NewsAggregator:
             symbols = [sector]
 
         merged: Dict[str, Dict] = {}
-        for symbol in symbols[:3]:
+        for symbol in symbols[:MAX_SECTOR_NEWS_SYMBOLS]:
             for item in self._fetch_company_news(symbol, days):
                 if not isinstance(item, dict):
                     continue

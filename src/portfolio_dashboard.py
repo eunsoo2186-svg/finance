@@ -262,6 +262,7 @@ for col in unified_columns:
     if col not in table_df.columns:
         table_df[col] = pd.NA
 
+non_numeric_unified_columns = {"보유여부", "종목명(한글)", "TICKER", "섹터", "소섹터", "메모", "신호"}
 column_config = {
     "P/E": st.column_config.NumberColumn(help="주가수익비율"),
     "PEG": st.column_config.NumberColumn(help="P/E 대비 성장률 보정 지표"),
@@ -304,13 +305,13 @@ try:
             na_rep="-",
         )
     )
-    st.dataframe(styled_unified, width="stretch", hide_index=True, column_config=column_config)
+    st.dataframe(styled_unified, use_container_width=True, hide_index=True, column_config=column_config)
 except AttributeError:
     fallback_df = table_df[unified_columns].copy()
     for c in fallback_df.columns:
-        if c not in {"보유여부", "종목명(한글)", "TICKER", "섹터", "소섹터", "메모", "신호"}:
+        if c not in non_numeric_unified_columns:
             fallback_df[c] = fallback_df[c].apply(_format_number)
-    st.dataframe(fallback_df.fillna("-"), width="stretch", hide_index=True)
+    st.dataframe(fallback_df.fillna("-"), use_container_width=True, hide_index=True)
 
 note_ticker = st.selectbox("메모 수정 종목", portfolio["ticker"].tolist(), format_func=lambda t: ticker_label_map.get(t, t))
 note_value = st.text_input("메모", value=str(notes_data.get(note_ticker, "")))
@@ -369,14 +370,14 @@ non_numeric_columns = {"company_name_en", "ticker", "market", "sector", "sub_sec
 for c in display_df.columns:
     if c not in non_numeric_columns:
         display_df[c] = display_df[c].apply(_format_number)
-st.dataframe(display_df.rename(columns=column_labels), width="stretch", hide_index=True)
+st.dataframe(display_df.rename(columns=column_labels), use_container_width=True, hide_index=True)
 
 with st.expander("Metric Definitions", expanded=False):
     for metric_name, metric_desc in METRIC_HELP.items():
         st.markdown(f"- **{metric_name}**: {metric_desc}")
     for sector in ["AI", "SPACE", "MARKET"]:
         st.markdown(f"#### {sector}")
-        st.dataframe(metric_basis_table(sector), width="stretch", hide_index=True)
+        st.dataframe(metric_basis_table(sector), use_container_width=True, hide_index=True)
 
 heatmap_cols = [c for c in portfolio.columns if c.endswith("_normalized")]
 if heatmap_cols:
@@ -395,7 +396,7 @@ if heatmap_cols:
             title="Stock Metric Normalization Heatmap (0~1)",
             aspect="auto",
         )
-        st.plotly_chart(fig_heat, width="stretch")
+        st.plotly_chart(fig_heat, use_container_width=True)
 else:
     st.info("히트맵 데이터가 부족합니다.")
 
@@ -408,7 +409,7 @@ fig_score = px.bar(
     title="Score and Signal by Sector",
 )
 fig_score.update_traces(textposition="outside")
-st.plotly_chart(fig_score, width="stretch")
+st.plotly_chart(fig_score, use_container_width=True)
 
 st.subheader("Notable News")
 news_ticker = st.selectbox("뉴스 조회 종목", portfolio["ticker"].tolist(), format_func=lambda t: ticker_label_map.get(t, t))
@@ -435,7 +436,7 @@ if notable_rows:
     notable_df = pd.DataFrame(notable_rows).sort_values("datetime", ascending=False).head(5)
     st.dataframe(
         notable_df[["datetime", "company", "source", "headline", "url"]],
-        width="stretch",
+        use_container_width=True,
         hide_index=True,
     )
 else:
@@ -444,13 +445,13 @@ else:
 news_rows = recent_news(news_ticker, keyword=keyword_filter, months=3)
 if news_rows:
     news_df = pd.DataFrame(news_rows).head(5)
-    st.dataframe(news_df[["datetime", "source", "headline", "summary", "url"]], width="stretch", hide_index=True)
+    st.dataframe(news_df[["datetime", "source", "headline", "summary", "url"]], use_container_width=True, hide_index=True)
 
     keywords = extract_keywords(news_rows)
     if keywords:
         keyword_df = pd.DataFrame(keywords)
         fig_kw = px.bar(keyword_df, x="keyword", y="count", title="뉴스 키워드 빈도")
-        st.plotly_chart(fig_kw, width="stretch")
+        st.plotly_chart(fig_kw, use_container_width=True)
 
     score_series = portfolio.loc[portfolio["ticker"] == news_ticker, "score"]
     if not score_series.empty:
@@ -463,7 +464,7 @@ if news_rows:
             ]
         )
         fig_signal = px.bar(signal_df, x="Metric", y="Score", range_y=[0, 100], title="AI 판단 점수")
-        st.plotly_chart(fig_signal, width="stretch")
+        st.plotly_chart(fig_signal, use_container_width=True)
 else:
     st.info("최근 3개월 뉴스가 없거나 API 키가 설정되지 않았습니다.")
 
@@ -499,13 +500,13 @@ for idx, sector_name in enumerate(sorted(portfolio["sector"].dropna().unique().t
             snapshot = pd.DataFrame(
                 [{"Metric": c, "Average": _format_number(pd.to_numeric(sec_df[c], errors="coerce").mean())} for c in numeric_cols]
             )
-            st.dataframe(snapshot, width="stretch", hide_index=True)
+            st.dataframe(snapshot, use_container_width=True, hide_index=True)
 
         st.markdown("#### Sector Ranking")
         ranking = sec_df.copy()
         ranking["종목명"] = ranking.apply(_display_name, axis=1)
         ranking["score"] = ranking["score"].apply(_format_number)
-        st.dataframe(ranking[["종목명", "ticker", "score", "signal"]], width="stretch", hide_index=True)
+        st.dataframe(ranking[["종목명", "ticker", "score", "signal"]], use_container_width=True, hide_index=True)
 
         st.markdown("#### 산업 동향 차트")
         trend_metrics = [c for c in ["pe_ratio", "peg_ratio", "score"] if c in sec_df.columns]
@@ -513,10 +514,10 @@ for idx, sector_name in enumerate(sorted(portfolio["sector"].dropna().unique().t
             trend_data = pd.DataFrame(
                 [{"Metric": m, "Average": pd.to_numeric(sec_df[m], errors="coerce").mean()} for m in trend_metrics]
             )
-            st.plotly_chart(px.bar(trend_data, x="Metric", y="Average", title=f"{sector_name} 평균 지표"), width="stretch")
+            st.plotly_chart(px.bar(trend_data, x="Metric", y="Average", title=f"{sector_name} 평균 지표"), use_container_width=True)
 
         if "score" in sec_df.columns:
             st.plotly_chart(
                 px.bar(sec_df, x="ticker", y="score", color="ticker", title=f"{sector_name} 종목별 Score 비교"),
-                width="stretch",
+                use_container_width=True,
             )
