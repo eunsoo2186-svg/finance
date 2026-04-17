@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from functools import lru_cache
+from pathlib import Path
 from typing import Dict
 
 from watchlist_manager import load_watchlist
@@ -42,8 +42,15 @@ def _normalize_symbol(symbol: str) -> str:
     return symbol
 
 
-@lru_cache(maxsize=1)
+_WATCHLIST_CACHE: Dict[str, object] = {"mtime": None, "data": {}}
+
+
 def _watchlist_metadata_map() -> Dict[str, Dict[str, str]]:
+    watchlist_path = Path(__file__).resolve().parents[1] / "config" / "watchlist.csv"
+    mtime = watchlist_path.stat().st_mtime if watchlist_path.exists() else None
+    if _WATCHLIST_CACHE["mtime"] == mtime:
+        return _WATCHLIST_CACHE["data"]  # type: ignore[return-value]
+
     mapping: Dict[str, Dict[str, str]] = {}
     for row in load_watchlist().to_dict(orient="records"):
         ticker = _normalize_symbol(str(row.get("ticker", "")))
@@ -57,6 +64,8 @@ def _watchlist_metadata_map() -> Dict[str, Dict[str, str]]:
             "sub_sector": str(row.get("sub_sector") or "General"),
             "market": str(row.get("exchange") or row.get("market") or "UNKNOWN").upper(),
         }
+    _WATCHLIST_CACHE["mtime"] = mtime
+    _WATCHLIST_CACHE["data"] = mapping
     return mapping
 
 

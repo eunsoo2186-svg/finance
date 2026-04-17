@@ -19,6 +19,7 @@ from watchlist_manager import load_watchlist_tickers
 ENV_PATH = Path(__file__).resolve().parents[1] / "config" / ".env"
 load_dotenv(ENV_PATH)
 LOGGER = logging.getLogger(__name__)
+KRX_PRICE_LOOKBACK_DAYS = 7
 
 AI_TICKERS = ["MSFT", "NVDA", "GOOGL", "TSLA"]
 SPACE_TICKERS = ["RTX", "LMT", "NOC", "BA"]
@@ -185,12 +186,15 @@ def _krx_price_from_fdr(symbol: str) -> float | None:
     try:
         import FinanceDataReader as fdr  # type: ignore
     except Exception:
+        LOGGER.info("FinanceDataReader is not installed. Skipping KRX fallback for %s", symbol)
         return None
     try:
-        frame = fdr.DataReader(symbol, start=(pd.Timestamp.today() - pd.Timedelta(days=7)).strftime("%Y-%m-%d"))
+        frame = fdr.DataReader(symbol, start=(pd.Timestamp.today() - pd.Timedelta(days=KRX_PRICE_LOOKBACK_DAYS)).strftime("%Y-%m-%d"))
     except Exception:
+        LOGGER.warning("FinanceDataReader lookup failed for %s", symbol)
         return None
     if frame is None or frame.empty:
+        LOGGER.warning("FinanceDataReader returned empty frame for %s", symbol)
         return None
     close_series = pd.to_numeric(frame.get("Close"), errors="coerce").dropna()
     if close_series.empty:

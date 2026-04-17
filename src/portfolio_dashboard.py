@@ -44,6 +44,20 @@ METRIC_HELP = {
     "Contract Pipeline (Proxy)": "분기 매출 흐름을 기반으로 한 수주 모멘텀 대체 지표입니다.",
     "Gov Spending Cycle (Proxy)": "정책/재정 사이클 민감도를 반영한 대체 지표입니다.",
 }
+# Cap API calls per refresh while still surfacing a representative notable-news sample.
+NEWS_SCAN_LIMIT = 20
+
+
+def _average_return_for_held(frame: pd.DataFrame, holdings_payload: dict) -> str:
+    held = frame[frame["ticker"].isin(set(holdings_payload.keys()))].copy()
+    if held.empty:
+        return "N/A"
+    held["purchase_price"] = held["ticker"].apply(lambda t: float(holdings_payload.get(t, {}).get("purchase_price", 0) or 0))
+    held["quantity"] = held["ticker"].apply(lambda t: float(holdings_payload.get(t, {}).get("quantity", 0) or 0))
+    held["current_value"] = held["current_price"].astype(float) * held["quantity"]
+    held["cost"] = held["purchase_price"] * held["quantity"]
+    ret = ((held["current_value"] - held["cost"]) / held["cost"].replace(0, pd.NA)) * 100
+    return _format_number(ret.mean())
 
 watchlist_defaults = load_watchlist_tickers()
 market_rows = load_market_tickers()
@@ -62,13 +76,16 @@ with st.sidebar:
 
     search_text = st.text_input("종목 검색 (Ticker/회사명)", value="")
     normalized_search = search_text.strip().lower()
-    filtered_tickers = [
+    filtered_tickers = sorted(
+        [
         t for t, label in ticker_label_map.items() if not normalized_search or normalized_search in label.lower() or normalized_search in t.lower()
-    ]
+        ]
+    )
 
+    sidebar_options = filtered_tickers if normalized_search else sorted(ticker_label_map.keys())
     selected = st.multiselect(
         "모니터링 종목 (NASDAQ/NYSE/KOSPI/KOSDAQ)",
-        options=filtered_tickers if normalized_search else sorted(ticker_label_map.keys()),
+        options=sidebar_options,
         default=[t for t in watchlist_defaults if t in ticker_label_map][:30],
         format_func=lambda t: ticker_label_map.get(t, t),
     )
@@ -120,17 +137,7 @@ with col1:
 with col2:
     st.metric("Average Score", _format_number(portfolio["score"].mean()))
 with col3:
-    held_set = set(holdings_data.keys())
-    held_df = portfolio[portfolio["ticker"].isin(held_set)].copy()
-    if not held_df.empty:
-        held_df["purchase_price"] = held_df["ticker"].apply(lambda t: float(holdings_data.get(t, {}).get("purchase_price", 0) or 0))
-        held_df["quantity"] = held_df["ticker"].apply(lambda t: float(holdings_data.get(t, {}).get("quantity", 0) or 0))
-        held_df["current_value"] = held_df["current_price"].astype(float) * held_df["quantity"]
-        held_df["cost"] = held_df["purchase_price"] * held_df["quantity"]
-        ret = ((held_df["current_value"] - held_df["cost"]) / held_df["cost"].replace(0, pd.NA)) * 100
-        st.metric("Average Return (%)", _format_number(ret.mean()))
-    else:
-        st.metric("Average Return (%)", "N/A")
+    st.metric("Average Return (%)", _average_return_for_held(portfolio, holdings_data))
 
 st.subheader("보유 정보 입력")
 held_selection = st.multiselect(
@@ -299,7 +306,7 @@ news_ticker = st.selectbox("뉴스 조회 종목", portfolio["ticker"].tolist(),
 keyword_filter = st.text_input("뉴스 키워드 필터")
 
 notable_rows = []
-for ticker in portfolio["ticker"].tolist()[:20]:
+for ticker in portfolio["ticker"].tolist()[:NEWS_SCAN_LIMIT]:
     rows = recent_news(ticker, months=2)
     for item in rows[:2]:
         notable_rows.append(

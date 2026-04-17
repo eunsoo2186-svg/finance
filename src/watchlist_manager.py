@@ -32,6 +32,14 @@ def _normalize_ticker(raw: str) -> str:
     return ticker
 
 
+def _select_display_name(company_name_ko: str, company_name_en: str, ticker: str) -> str:
+    if company_name_ko:
+        return company_name_ko
+    if company_name_en:
+        return company_name_en
+    return ticker
+
+
 def _read_json(path: Path) -> Dict[str, Any]:
     if not path.exists():
         return {}
@@ -89,11 +97,10 @@ def load_watchlist() -> pd.DataFrame:
     df["company_name_en"] = df["company_name_en"].fillna("").astype(str).str.strip()
     df["exchange"] = df["exchange"].fillna("UNKNOWN").astype(str).str.upper().str.strip()
     df["market"] = df["exchange"]
-    df["company_name"] = (
-        df["company_name_ko"]
-        .where(df["company_name_ko"].str.len() > 0, df["company_name_en"])
-        .where(lambda s: s.str.len() > 0, df["ticker"])
-    )
+    df["company_name"] = [
+        _select_display_name(ko, en, ticker)
+        for ko, en, ticker in zip(df["company_name_ko"], df["company_name_en"], df["ticker"])
+    ]
     if "sector" not in df.columns:
         df["sector"] = "MARKET"
     if "sub_sector" not in df.columns:
