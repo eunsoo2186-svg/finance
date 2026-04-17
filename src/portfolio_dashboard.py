@@ -326,6 +326,7 @@ METRIC_HELP = {
 # Cap API calls per refresh while still surfacing a representative notable-news sample.
 NEWS_SCAN_LIMIT = 20
 news_agg = NewsAggregator(os.getenv("FINNHUB_API_KEY", ""))
+MAX_DETAILED_ANALYSIS_ROWS = 12
 
 
 def _average_return_for_held(frame: pd.DataFrame, holdings_payload: dict) -> str:
@@ -554,6 +555,9 @@ table_df["신호"] = table_df["score"].apply(lambda s: _daily_signal(float(s)))
 
 
 def _row_metrics_payload(row: pd.Series) -> dict:
+    raw_volume_ratio = pd.to_numeric(row.get("volume_ratio"), errors="coerce")
+    raw_above_20ma = row.get("price_above_20ma")
+    raw_above_200ma = row.get("price_above_200ma")
     return {
         "pe_ratio": pd.to_numeric(row.get("pe_ratio"), errors="coerce"),
         "peg_ratio": pd.to_numeric(row.get("peg_ratio"), errors="coerce"),
@@ -561,10 +565,11 @@ def _row_metrics_payload(row: pd.Series) -> dict:
         "asset_turnover": pd.to_numeric(row.get("asset_turnover"), errors="coerce"),
         "debt_ratio": pd.to_numeric(row.get("debt_ratio"), errors="coerce"),
         "dividend_yield": pd.to_numeric(row.get("dividend_yield"), errors="coerce"),
-        "rsi": pd.to_numeric(row.get("tech_cycle"), errors="coerce"),
-        "volume_ratio": 1.0,
-        "price_above_20ma": True,
-        "price_above_200ma": True,
+        "rsi": pd.to_numeric(row.get("rsi"), errors="coerce"),
+        "tech_cycle_proxy": pd.to_numeric(row.get("tech_cycle"), errors="coerce"),
+        "volume_ratio": None if pd.isna(raw_volume_ratio) else float(raw_volume_ratio),
+        "price_above_20ma": raw_above_20ma if isinstance(raw_above_20ma, bool) else None,
+        "price_above_200ma": raw_above_200ma if isinstance(raw_above_200ma, bool) else None,
         "eps_growth_yoy": pd.to_numeric(row.get("revenue_growth_yoy"), errors="coerce"),
     }
 
@@ -783,7 +788,7 @@ except AttributeError:
     st.dataframe(fallback_df.fillna("-"), use_container_width=True, hide_index=True)
 
 st.subheader("🔎 Level별 상세 분석")
-for _, row in table_df.head(12).iterrows():
+for _, row in table_df.head(MAX_DETAILED_ANALYSIS_ROWS).iterrows():
     ticker = str(row.get("TICKER", ""))
     action = str(row.get("액션", ""))
     with st.expander(f"{ticker} | {action} | Score {float(row.get('스코어') or 0):.1f}", expanded=False):

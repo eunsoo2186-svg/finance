@@ -4,7 +4,6 @@ from portfolio_data import build_entry_analysis, build_exit_analysis
 
 
 def recommendation_from_score(score: float, held: bool) -> str:
-    score = float(score)
     if held:
         if score < 35:
             return "손절"

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 import time
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -44,30 +45,39 @@ SECTOR_HIERARCHY = DEFAULT_SECTOR_HIERARCHY
 
 
 def ttl_cache(maxsize: int, ttl: int):
-    """TTL 기반 캐시 데코레이터."""
+    """TTL 기반 캐시 데코레이터.
+
+    Args:
+        maxsize: 캐시 최대 엔트리 개수 (초과 시 오래된 순으로 제거).
+        ttl: 각 엔트리 유효 시간(초).
+    """
     cache_dict: OrderedDict[tuple, tuple[Any, float]] = OrderedDict()
+    lock = threading.Lock()
 
     def decorator(func: Callable):
         @wraps(func)
         def wrapper(*args, **kwargs):
             key = (args, tuple(sorted(kwargs.items())))
             now = time.time()
-            if key in cache_dict:
-                result, expiry = cache_dict[key]
-                if now < expiry:
-                    cache_dict.move_to_end(key)
-                    return result
-                del cache_dict[key]
+            with lock:
+                if key in cache_dict:
+                    result, expiry = cache_dict[key]
+                    if now < expiry:
+                        cache_dict.move_to_end(key)
+                        return result
+                    del cache_dict[key]
 
             result = func(*args, **kwargs)
-            cache_dict[key] = (result, now + ttl)
-            cache_dict.move_to_end(key)
-            while len(cache_dict) > maxsize:
-                cache_dict.popitem(last=False)
+            with lock:
+                cache_dict[key] = (result, now + ttl)
+                cache_dict.move_to_end(key)
+                while len(cache_dict) > maxsize:
+                    cache_dict.popitem(last=False)
             return result
 
         def cache_clear():
-            cache_dict.clear()
+            with lock:
+                cache_dict.clear()
 
         wrapper.cache_clear = cache_clear  # type: ignore[attr-defined]
         return wrapper
@@ -76,6 +86,7 @@ def ttl_cache(maxsize: int, ttl: int):
 
 
 _RUN_SECTOR_AVERAGE_CACHE: Dict[tuple[str, str], float] = {}
+_RUN_SECTOR_AVERAGE_LOCK = threading.Lock()
 
 
 def _set_run_sector_metric_averages(rows: List[Dict[str, object]]) -> None:
@@ -99,15 +110,18 @@ def _set_run_sector_metric_averages(rows: List[Dict[str, object]]) -> None:
                 continue
             grouped.setdefault((sector, metric_name), []).append(numeric)
 
-    _RUN_SECTOR_AVERAGE_CACHE = {
+    updated_cache = {
         key: float(sum(values) / len(values))
         for key, values in grouped.items()
         if values
     }
+    with _RUN_SECTOR_AVERAGE_LOCK:
+        _RUN_SECTOR_AVERAGE_CACHE = updated_cache
 
 
 def _sector_metric_average(sector: str, metric_name: str) -> float | None:
-    return _RUN_SECTOR_AVERAGE_CACHE.get((sector, metric_name))
+    with _RUN_SECTOR_AVERAGE_LOCK:
+        return _RUN_SECTOR_AVERAGE_CACHE.get((sector, metric_name))
 
 
 def _normalize_market_label(raw_exchange: object) -> str:
@@ -564,7 +578,10 @@ def fetch_atr(symbol: str, period: int = 14) -> float:
     low = pd.to_numeric(history.get("Low"), errors="coerce")
     close = pd.to_numeric(history.get("Close"), errors="coerce")
     prev_close = close.shift(1)
-    true_range = pd.concat([(high - low).abs(), (high - prev_close).abs(), (low - prev_close).abs()], axis=1).max(axis=1)
+    hl_range = (high - low).abs()
+    hc_range = (high - prev_close).abs()
+    lc_range = (low - prev_close).abs()
+    true_range = pd.concat([hl_range, hc_range, lc_range], axis=1).max(axis=1)
     atr = pd.to_numeric(true_range, errors="coerce").rolling(period).mean().dropna()
     if atr.empty:
         return 0.0
@@ -602,7 +619,7 @@ def suggest_position_size(
         "kelly_fraction": round(kelly_fraction, 4),
         "suggested_amount": round(min(suggested_amount, max_amount), 2),
         "max_amount": round(max_amount, 2),
-        "rationale": f"Kelly {kelly_fraction*100:.1f}% 기반 (score={float(score):.1f})",
+        "rationale": f"Kelly {kelly_fraction*100:.1f}% 기반",
     }
 
 
@@ -712,11 +729,11 @@ def build_entry_analysis(symbol: str, metrics: Dict[str, float | None], score: f
     growth = metrics.get("revenue_growth_yoy")
     eps_growth = metrics.get("eps_growth_yoy")
     rsi = metrics.get("rsi")
-    above_20ma = bool(metrics.get("price_above_20ma", False))
+    above_20ma = metrics.get("price_above_20ma")
     volume_ratio = metrics.get("volume_ratio")
     level_1_pass = (pe is not None and pe <= 35) and (peg is not None and peg <= 2.0) and (rsi is None or 45 <= rsi <= 70)
     level_2_pass = (eps_growth is None or eps_growth >= 0) and (growth is None or growth >= 0) and (peg is None or peg <= 2.0)
-    level_3_pass = (rsi is None or 45 <= rsi <= 65) and (above_20ma or metrics.get("ma20") is None) and (volume_ratio is None or volume_ratio >= 0.8)
+    level_3_pass = (rsi is None or 45 <= rsi <= 65) and (above_20ma is None or bool(above_20ma)) and (volume_ratio is None or volume_ratio >= 0.8)
     level_4_pass = news_count <= 0 or sentiment_ratio >= 0.5
     level_5_pass = score >= 70
     decision = "🟢 강 진입" if level_5_pass and level_1_pass and level_2_pass else ("🟡 중 진입" if score >= 55 else "🟠 관찰")
@@ -727,7 +744,7 @@ def build_entry_analysis(symbol: str, metrics: Dict[str, float | None], score: f
         "levels": [
             {"level": 1, "name": "기본 스크린", "pass": level_1_pass, "detail": f"PEG={peg}, PE={pe}, RSI={rsi}"},
             {"level": 2, "name": "성장성 검증", "pass": level_2_pass, "detail": f"EPS={eps_growth}, Revenue={growth}, PEG={peg}"},
-            {"level": 3, "name": "기술적 신호", "pass": level_3_pass, "detail": f"20MA={above_20ma}, 거래량비={volume_ratio}, RSI={rsi}"},
+            {"level": 3, "name": "기술적 신호", "pass": level_3_pass, "detail": f"20MA상단={above_20ma}, 거래량비={volume_ratio}, RSI={rsi}"},
             {"level": 4, "name": "뉴스/감성", "pass": level_4_pass, "detail": f"뉴스={news_count}, 감성비율={sentiment_ratio:.2f}"},
             {"level": 5, "name": "최종 점수/Kelly", "pass": level_5_pass, "detail": f"최종 점수={score:.1f}"},
         ],
@@ -737,11 +754,11 @@ def build_entry_analysis(symbol: str, metrics: Dict[str, float | None], score: f
 def build_exit_analysis(symbol: str, metrics: Dict[str, float | None], profit_rate: float | None) -> Dict[str, object]:
     profit = float(profit_rate) if profit_rate is not None else 0.0
     rsi = metrics.get("rsi")
-    above_200ma = bool(metrics.get("price_above_200ma", True))
+    above_200ma = metrics.get("price_above_200ma")
     volume_ratio = metrics.get("volume_ratio")
     eps_growth = metrics.get("eps_growth_yoy")
     level_1_risk = 1 if profit <= -20 else (0 if profit > -5 else 0.5)
-    level_2_risk = 1 if (rsi is not None and rsi < 35) or not above_200ma or (volume_ratio is not None and volume_ratio > 2.0) else 0
+    level_2_risk = 1 if (rsi is not None and rsi < 35) or (above_200ma is False) or (volume_ratio is not None and volume_ratio > 2.0) else 0
     level_3_risk = 1 if (eps_growth is not None and eps_growth < 0) else 0
     risk_score = int(round(level_1_risk + level_2_risk + level_3_risk + (1 if profit <= -10 else 0)))
     risk_score = max(0, min(5, risk_score))
