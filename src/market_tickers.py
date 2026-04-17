@@ -62,6 +62,7 @@ def _finnhub_symbols() -> List[Dict[str, str]]:
             if not ticker:
                 continue
             if exchange == "US":
+                # Finnhub may return either `mic` or legacy `micExchange`; support both for compatibility.
                 market = _map_us_market(str(item.get("mic") or item.get("micExchange") or ""))
                 if market not in {"NASDAQ", "NYSE"}:
                     continue

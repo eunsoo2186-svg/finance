@@ -21,7 +21,10 @@ class DashboardRequirementTests(unittest.TestCase):
         self.assertTrue(ai_basis["지표"].str.contains("/").any())
 
     @patch("portfolio_data._ticker_info", return_value={})
-    @patch("portfolio_data.metadata_for_ticker", return_value={"company_name": "Microsoft", "sub_sector": "LLM", "market": "NASDAQ"})
+    @patch(
+        "portfolio_data.metadata_for_ticker",
+        return_value={"company_name": "Microsoft", "sector": "AI", "sub_sector": "LLM", "market": "NASDAQ"},
+    )
     @patch(
         "portfolio_data.stock_metrics",
         return_value={

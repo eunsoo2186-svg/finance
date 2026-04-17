@@ -17,6 +17,9 @@ DEFAULT_SECTOR_HIERARCHY: Dict[str, Dict[str, list[str]]] = {
     },
 }
 
+AI_SECTORS = {"Technology", "Communication Services", "Information Technology"}
+SPACE_SECTORS = {"Aerospace & Defense", "Industrials", "Defense"}
+
 BASE_METADATA: Dict[str, Dict[str, str]] = {
     "MSFT": {"company_name": "Microsoft", "sector": "AI", "sub_sector": "LLM", "market": "NASDAQ"},
     "NVDA": {"company_name": "NVIDIA", "sector": "AI", "sub_sector": "반도체", "market": "NASDAQ"},
@@ -55,9 +58,9 @@ def metadata_for_ticker(symbol: str, info: Dict[str, object] | None = None) -> D
     inferred_sub_sector = str(info.get("industry") or "기타")
     market = _market_from_exchange(str(info.get("exchange") or info.get("fullExchangeName") or ""))
 
-    if inferred_sector in {"Technology", "Communication Services", "Information Technology"}:
+    if inferred_sector in AI_SECTORS:
         sector = "AI"
-    elif inferred_sector in {"Aerospace & Defense", "Industrials", "Defense"}:
+    elif inferred_sector in SPACE_SECTORS:
         sector = "SPACE"
     else:
         sector = "MARKET"

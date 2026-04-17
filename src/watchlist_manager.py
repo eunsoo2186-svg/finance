@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
-from typing import Dict, List
+from typing import Any, Dict, List
 
 import pandas as pd
 
@@ -11,18 +12,20 @@ WATCHLIST_PATH = ROOT / "config" / "watchlist.csv"
 FAVORITES_PATH = ROOT / "config" / "favorites.json"
 NOTES_PATH = ROOT / "config" / "notes.json"
 HOLDINGS_PATH = ROOT / "config" / "holdings.json"
+LOGGER = logging.getLogger(__name__)
 
 
-def _read_json(path: Path) -> Dict[str, object]:
+def _read_json(path: Path) -> Dict[str, Any]:
     if not path.exists():
         return {}
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
+        LOGGER.warning("JSON decode failed for %s. Falling back to empty payload.", path)
         return {}
 
 
-def _write_json(path: Path, payload: Dict[str, object]) -> None:
+def _write_json(path: Path, payload: Dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -87,11 +90,11 @@ def save_notes(notes: Dict[str, str]) -> None:
     _write_json(NOTES_PATH, clean)
 
 
-def load_holdings() -> Dict[str, Dict[str, object]]:
+def load_holdings() -> Dict[str, Dict[str, Any]]:
     raw = _read_json(HOLDINGS_PATH)
     if not isinstance(raw, dict):
         return {}
-    out: Dict[str, Dict[str, object]] = {}
+    out: Dict[str, Dict[str, Any]] = {}
     for ticker, payload in raw.items():
         if not isinstance(payload, dict):
             continue
@@ -103,5 +106,5 @@ def load_holdings() -> Dict[str, Dict[str, object]]:
     return out
 
 
-def save_holdings(holdings: Dict[str, Dict[str, object]]) -> None:
+def save_holdings(holdings: Dict[str, Dict[str, Any]]) -> None:
     _write_json(HOLDINGS_PATH, holdings)

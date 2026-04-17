@@ -4,9 +4,11 @@ import os
 import re
 from collections import Counter
 from datetime import datetime, timedelta, timezone
-from typing import Dict, List
+from typing import Dict, List, Union
 
 import requests
+
+ENGLISH_STOPWORDS = {"the", "and", "for", "with", "from", "stock", "shares", "will", "this", "that", "company"}
 
 
 def recent_news(ticker: str, keyword: str = "", months: int = 3) -> List[Dict[str, str]]:
@@ -58,13 +60,12 @@ def recent_news(ticker: str, keyword: str = "", months: int = 3) -> List[Dict[st
     return rows
 
 
-def extract_keywords(news_rows: List[Dict[str, str]], top_n: int = 8) -> List[Dict[str, object]]:
-    stop = {"the", "and", "for", "with", "from", "stock", "shares", "will", "this", "that", "company"}
+def extract_keywords(news_rows: List[Dict[str, str]], top_n: int = 8) -> List[Dict[str, Union[str, int]]]:
     tokens: List[str] = []
 
     for row in news_rows:
         headline = str(row.get("headline") or "").lower()
-        tokens.extend([w for w in re.findall(r"[a-z]{3,}", headline) if w not in stop])
+        tokens.extend([w for w in re.findall(r"[a-z]{3,}", headline) if w not in ENGLISH_STOPWORDS])
 
     counts = Counter(tokens)
     return [{"keyword": k, "count": v} for k, v in counts.most_common(top_n)]

@@ -268,11 +268,11 @@ def stock_metrics(symbol: str, sector: str) -> Dict[str, float | None]:
     rd_expense = _safe_number(info.get("researchDevelopment"))
 
     rd_ratio = None
-    if rd_expense is not None and total_revenue not in (None, 0):
+    if rd_expense is not None and total_revenue is not None and total_revenue != 0:
         rd_ratio = rd_expense / total_revenue
 
     asset_turnover = None
-    if total_revenue is not None and total_assets not in (None, 0):
+    if total_revenue is not None and total_assets is not None and total_assets != 0:
         asset_turnover = total_revenue / total_assets
 
     if sector == "AI":

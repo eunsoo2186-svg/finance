@@ -141,8 +141,9 @@ column_labels = {
 }
 
 display_df = portfolio[[c for c in display_columns if c in portfolio.columns]].copy()
+non_numeric_columns = {"ticker_display", "market", "sector", "sub_sector", "signal"}
 for c in display_df.columns:
-    if c not in {"ticker_display", "market", "sector", "sub_sector", "signal"}:
+    if c not in non_numeric_columns and pd.api.types.is_numeric_dtype(display_df[c]):
         display_df[c] = display_df[c].where(pd.notna(display_df[c]), "-")
 
 st.dataframe(display_df.rename(columns=column_labels), width="stretch", hide_index=True)
@@ -250,16 +251,18 @@ if news_rows:
         fig_kw = px.bar(keyword_df, x="keyword", y="count", title="뉴스 키워드 빈도")
         st.plotly_chart(fig_kw, width="stretch")
 
-    base_score = float(portfolio.loc[portfolio["ticker"] == news_ticker, "score"].iloc[0])
-    blended = blended_signal_score(base_score, len(news_rows))
-    signal_df = pd.DataFrame(
-        [
-            {"지표": "재무 기반 점수", "점수": base_score},
-            {"지표": "뉴스 반영 AI 점수", "점수": blended},
-        ]
-    )
-    fig_signal = px.bar(signal_df, x="지표", y="점수", range_y=[0, 100], title="AI 판단 점수")
-    st.plotly_chart(fig_signal, width="stretch")
+    score_series = portfolio.loc[portfolio["ticker"] == news_ticker, "score"]
+    if not score_series.empty:
+        base_score = float(score_series.iloc[0])
+        blended = blended_signal_score(base_score, len(news_rows))
+        signal_df = pd.DataFrame(
+            [
+                {"지표": "재무 기반 점수", "점수": base_score},
+                {"지표": "뉴스 반영 AI 점수", "점수": blended},
+            ]
+        )
+        fig_signal = px.bar(signal_df, x="지표", y="점수", range_y=[0, 100], title="AI 판단 점수")
+        st.plotly_chart(fig_signal, width="stretch")
 else:
     st.info("최근 3개월 뉴스가 없거나 API 키가 설정되지 않았습니다.")
 
