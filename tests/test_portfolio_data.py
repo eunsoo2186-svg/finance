@@ -1,10 +1,21 @@
 import unittest
 from pathlib import Path
 import sys
+import tempfile
+from unittest.mock import patch
+import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from portfolio_data import MetricSpec, build_portfolio_dataframe, get_sector_info, normalize_metric, score_stock, signal_from_score
+from portfolio_data import (
+    MetricSpec,
+    build_portfolio_dataframe,
+    get_sector_info,
+    load_all_tickers,
+    normalize_metric,
+    score_stock,
+    signal_from_score,
+)
 
 BUY_SIGNAL = "진입"
 HOLD_SIGNAL = "보유"
@@ -85,6 +96,54 @@ class PortfolioDataTests(unittest.TestCase):
         sector, sub_sector = get_sector_info("MSFT")
         self.assertTrue(sector)
         self.assertTrue(sub_sector)
+
+    def test_load_all_tickers_reads_market_db_csv(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            csv_path = Path(tmp_dir) / "market_db.csv"
+            csv_path.write_text(
+                "ticker,company_name_ko,company_name_en,exchange,sector,sub_sector\n"
+                "MSFT,마이크로소프트,Microsoft,NASDAQ,Technology,Software\n"
+                "005930,삼성전자,Samsung Electronics,KOSPI,Technology,Semiconductors\n",
+                encoding="utf-8",
+            )
+            with patch("portfolio_data.MARKET_DB_PATH", csv_path):
+                load_all_tickers.cache_clear()
+                rows = load_all_tickers()
+                load_all_tickers.cache_clear()
+        row_map = {row["ticker"]: row for row in rows}
+        self.assertIn("005930", row_map)
+        self.assertIn("MSFT", row_map)
+        self.assertEqual(row_map["MSFT"]["exchange"], "NASDAQ")
+        self.assertEqual(row_map["005930"]["company_name_ko"], "삼성전자")
+
+    def test_load_all_tickers_normalizes_krx_suffix_and_padding(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            csv_path = Path(tmp_dir) / "market_db.csv"
+            csv_path.write_text(
+                "ticker,company_name_ko,company_name_en,exchange,sector,sub_sector\n"
+                "930.KS,삼성전자,Samsung Electronics,KOSPI,Technology,Semiconductors\n",
+                encoding="utf-8",
+            )
+            with patch("portfolio_data.MARKET_DB_PATH", csv_path):
+                load_all_tickers.cache_clear()
+                rows = load_all_tickers()
+                load_all_tickers.cache_clear()
+        self.assertEqual(rows[0]["ticker"], "000930")
+
+    @patch("portfolio_data._rows_from_market_csv", return_value=[])
+    @patch(
+        "portfolio_data.load_watchlist",
+        return_value=pd.DataFrame(
+            [{"ticker": "AAPL", "company_name_en": "Apple", "exchange": "NASDAQ", "sector": "Technology", "sub_sector": "Consumer Electronics"}]
+        ),
+    )
+    def test_load_all_tickers_falls_back_to_watchlist(self, mock_load_watchlist, mock_rows_from_market_csv):
+        load_all_tickers.cache_clear()
+        rows = load_all_tickers()
+        load_all_tickers.cache_clear()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["ticker"], "AAPL")
+        self.assertEqual(rows[0]["company_name_en"], "Apple")
 
 
 if __name__ == "__main__":
