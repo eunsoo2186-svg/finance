@@ -4,9 +4,10 @@ import argparse
 import io
 import logging
 import time
+from datetime import datetime, timedelta, timezone
 from json import JSONDecodeError
 from pathlib import Path
-from typing import Dict, Iterable, List
+from typing import Dict, Iterable, List, Optional
 
 import pandas as pd
 import requests
@@ -25,7 +26,14 @@ LOGGER = logging.getLogger(__name__)
 NASDAQ_LISTED_URL = "https://www.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.txt"
 OTHER_LISTED_URL = "https://www.nasdaqtrader.com/dynamic/SymDir/otherlisted.txt"
 OTHER_LISTED_ACT_SYMBOL_COLUMN = "ACT Symbol"
+KRX_DESC_CACHE_URL_TEMPLATE = (
+    "https://raw.githubusercontent.com/FinanceData/fdr_krx_data_cache/refs/heads/master/"
+    "data/listing/desc/{date}.csv"
+)
+KRX_DESC_CACHE_LOOKBACK_DAYS = 120
 DEFAULT_UNKNOWN = "Unknown"
+_KRX_DESC_FRAME_CACHE: Dict[str, pd.DataFrame] = {}
+_KRX_DESC_LAST_GOOD_DATE: Optional[str] = None
 
 
 def _non_negative_float(raw: str) -> float:
@@ -103,7 +111,7 @@ def _load_nyse_rows() -> List[Dict[str, str]]:
 def _load_krx_rows(market: str) -> List[Dict[str, str]]:
     if stock is None:
         LOGGER.warning("pykrx is not installed. Skipping %s.", market)
-        return []
+        return _load_krx_rows_from_cache(market)
     try:
         tickers = stock.get_market_ticker_list(market=market)
     except (
@@ -115,10 +123,10 @@ def _load_krx_rows(market: str) -> List[Dict[str, str]]:
         requests.RequestException,
     ) as exc:
         LOGGER.warning("Failed to fetch KRX ticker list for %s: %s", market, exc)
-        return []
+        return _load_krx_rows_from_cache(market)
     except Exception as exc:  # pragma: no cover - pykrx can raise non-standard runtime errors
         LOGGER.warning("Unexpected pykrx failure while loading %s: %s", market, exc)
-        return []
+        return _load_krx_rows_from_cache(market)
     out: List[Dict[str, str]] = []
     for ticker in tickers:
         try:
@@ -136,7 +144,83 @@ def _load_krx_rows(market: str) -> List[Dict[str, str]]:
                 "sub_sector": DEFAULT_UNKNOWN,
             }
         )
-    return out
+    if out:
+        return out
+    return _load_krx_rows_from_cache(market)
+
+
+def _normalize_krx_market(raw: object) -> str:
+    value = str(raw or "").upper().strip()
+    if value == "KOSDAQ GLOBAL":
+        return "KOSDAQ"
+    return value
+
+
+def _load_krx_desc_frame(target_date: str) -> pd.DataFrame:
+    if target_date in _KRX_DESC_FRAME_CACHE:
+        return _KRX_DESC_FRAME_CACHE[target_date]
+
+    url = KRX_DESC_CACHE_URL_TEMPLATE.format(date=target_date)
+    try:
+        frame = pd.read_csv(url, dtype={"Code": str})
+    except Exception as exc:
+        LOGGER.debug("Failed to read KRX fallback cache from %s: %s", url, exc)
+        frame = pd.DataFrame()
+    _KRX_DESC_FRAME_CACHE[target_date] = frame
+    return frame
+
+
+def _load_krx_rows_from_cache(market: str) -> List[Dict[str, str]]:
+    global _KRX_DESC_LAST_GOOD_DATE
+
+    normalized_market = market.upper().strip()
+    base_date = datetime.now(timezone.utc)
+    date_candidates: List[str] = []
+    if _KRX_DESC_LAST_GOOD_DATE:
+        date_candidates.append(_KRX_DESC_LAST_GOOD_DATE)
+    date_candidates.extend(
+        (base_date - timedelta(days=offset)).strftime("%Y-%m-%d")
+        for offset in range(KRX_DESC_CACHE_LOOKBACK_DAYS + 1)
+    )
+
+    for target_date in date_candidates:
+        frame = _load_krx_desc_frame(target_date)
+        if frame.empty:
+            continue
+
+        if "Market" not in frame.columns:
+            continue
+        frame["Market"] = frame["Market"].map(_normalize_krx_market)
+        market_frame = frame.loc[frame["Market"] == normalized_market]
+        if market_frame.empty:
+            continue
+
+        out: List[Dict[str, str]] = []
+        for row in market_frame.to_dict(orient="records"):
+            ticker = str(row.get("Code") or "").zfill(6)
+            if not ticker.isdigit():
+                continue
+            company_name = str(row.get("Name") or ticker).strip()
+            sector = str(row.get("Sector") or DEFAULT_UNKNOWN).strip() or DEFAULT_UNKNOWN
+            sub_sector = str(row.get("Industry") or DEFAULT_UNKNOWN).strip() or DEFAULT_UNKNOWN
+            out.append(
+                {
+                    "ticker": ticker,
+                    "company_name_ko": company_name,
+                    "company_name_en": company_name,
+                    "exchange": normalized_market,
+                    "sector": sector,
+                    "sub_sector": sub_sector,
+                }
+            )
+
+        if out:
+            _KRX_DESC_LAST_GOOD_DATE = target_date
+            LOGGER.info("Loaded %s fallback rows from %s", len(out), KRX_DESC_CACHE_URL_TEMPLATE.format(date=target_date))
+            return out
+
+    LOGGER.warning("Failed to load fallback KRX cache for %s", normalized_market)
+    return []
 
 
 def _load_watchlist_rows() -> List[Dict[str, str]]:
