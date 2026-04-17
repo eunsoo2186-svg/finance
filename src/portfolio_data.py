@@ -182,6 +182,7 @@ METRIC_SPECS: Dict[str, Dict[str, MetricSpec]] = {
     },
     "MARKET": {
         "pe_ratio": MetricSpec("P/E Ratio", 8, 60, False, "yfinance.info.trailingPE", "trailingPE"),
+        "peg_ratio": MetricSpec("PEG Ratio", 0.3, 3.0, False, "yfinance.info.pegRatio", "pegRatio"),
         "revenue_growth_yoy": MetricSpec(
             "YoY Revenue Growth", -0.2, 0.5, True, "yfinance.info.revenueGrowth", "revenueGrowth"
         ),
@@ -218,14 +219,19 @@ DEFAULT_WEIGHTS: Dict[str, Dict[str, float]] = {
         "gov_cycle": 0.10,
     },
     "MARKET": {
-        "pe_ratio": 0.20,
-        "revenue_growth_yoy": 0.22,
-        "asset_turnover": 0.18,
-        "debt_ratio": 0.15,
+        "pe_ratio": 0.16,
+        "peg_ratio": 0.16,
+        "revenue_growth_yoy": 0.20,
+        "asset_turnover": 0.16,
+        "debt_ratio": 0.13,
         "dividend_yield": 0.10,
-        "tech_cycle": 0.15,
+        "tech_cycle": 0.09,
     },
 }
+
+for _sector_name, _weights in DEFAULT_WEIGHTS.items():
+    if round(sum(_weights.values()), 6) != 1.0:
+        LOGGER.warning("DEFAULT_WEIGHTS for %s should sum to 1.0 (actual=%s)", _sector_name, sum(_weights.values()))
 
 
 @lru_cache(maxsize=64)
@@ -450,6 +456,7 @@ def stock_metrics(symbol: str, sector: str) -> Dict[str, float | None]:
 
     return {
         "pe_ratio": _safe_number(info.get("trailingPE")),
+        "peg_ratio": _safe_number(info.get("pegRatio")),
         "revenue_growth_yoy": _safe_number(info.get("revenueGrowth")),
         "asset_turnover": asset_turnover,
         "debt_ratio": _safe_number(info.get("debtToEquity"), 0.01),

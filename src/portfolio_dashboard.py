@@ -6,10 +6,20 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-from ai_analysis import blended_signal_score, recommendation_from_score
+from ai_analysis import blended_signal_score
 from news_aggregator import NewsAggregator, extract_keywords, recent_news
 from portfolio_data import DEFAULT_WEIGHTS, METRIC_SPECS, build_portfolio_dataframe, load_all_tickers, metric_basis_table
-from watchlist_manager import load_favorites, load_holdings, load_notes, load_watchlist_tickers, save_favorites, save_holdings, save_notes
+from watchlist_manager import (
+    load_favorites,
+    load_holdings,
+    load_notes,
+    load_watchlist,
+    load_watchlist_tickers,
+    save_favorites,
+    save_holdings,
+    save_notes,
+    save_watchlist,
+)
 
 st.set_page_config(page_title="Portfolio Dashboard", page_icon="📊", layout="wide")
 st.title("📊 포트폴리오 대시보드")
@@ -18,11 +28,21 @@ st.caption("시장 전체 티커 검색 + 보유/미보유 통합 분석 + 재�
 
 def _format_number(value: object) -> str:
     if value is None or pd.isna(value):
-        return "N/A"
+        return "-"
     try:
         return f"{float(value):.2f}"
     except (TypeError, ValueError):
-        return "N/A"
+        return "-"
+
+
+def _format_currency(value: object) -> str:
+    if value is None or pd.isna(value):
+        return "-"
+    try:
+        amount = float(value)
+    except (TypeError, ValueError):
+        return "-"
+    return f"{amount:,.0f}"
 
 
 def _display_name(row: pd.Series) -> str:
@@ -37,7 +57,7 @@ def _display_name_ko(row: pd.Series) -> str:
 
 
 def _row_background_style(row: pd.Series) -> list[str]:
-    color = "background-color: #eaf3ff;" if row.get("보유여부") == "보유" else ""
+    color = "background-color: #eaf3ff;" if row.get("보유여부") == "✅" else ""
     return [color] * len(row)
 
 
@@ -49,10 +69,55 @@ def _return_style(value: object) -> str:
     except (TypeError, ValueError):
         return ""
     if val > 0:
-        return "color: #d32f2f; font-weight: 600;"
-    if val < 0:
         return "color: #2e7d32; font-weight: 600;"
+    if val < 0:
+        return "color: #d32f2f; font-weight: 600;"
     return ""
+
+
+def _metric_value_style(value: object, metric_name: str) -> str:
+    if value is None or pd.isna(value):
+        return ""
+    try:
+        val = float(value)
+    except (TypeError, ValueError):
+        return ""
+
+    thresholds = {
+        "P/E": (10, 35),
+        "PEG": (0.8, 2.0),
+        "Revenue Growth(%)": (5, 15),
+        "R&D Ratio(%)": (5, 15),
+        "Operating Margin(%)": (8, 20),
+        "Debt Ratio(%)": (30, 60),
+        "Dividend Yield(%)": (1, 4),
+    }
+    if metric_name not in thresholds:
+        return ""
+
+    low, high = thresholds[metric_name]
+    if metric_name in {"P/E", "PEG", "Debt Ratio(%)"}:
+        if val <= low:
+            return "color: #1565c0; font-weight: 600;"
+        if val <= high:
+            return "color: #f57c00; font-weight: 600;"
+        return "color: #c62828; font-weight: 600;"
+
+    if val >= high:
+        return "color: #1565c0; font-weight: 600;"
+    if val >= low:
+        return "color: #f57c00; font-weight: 600;"
+    return "color: #c62828; font-weight: 600;"
+
+
+def _daily_signal(score: float) -> str:
+    if score >= 80:
+        return "🟢 진입"
+    if score >= 60:
+        return "🟡 관찰"
+    if score >= 40:
+        return "🟠 주의"
+    return "🔴 회피"
 
 
 def _format_news_datetime(value: object) -> str:
@@ -81,6 +146,8 @@ METRIC_HELP = {
 }
 # Cap API calls per refresh while still surfacing a representative notable-news sample.
 NEWS_SCAN_LIMIT = 20
+# Conservative placeholder for daily drift when no intraday PnL feed is available (~0.2%).
+ESTIMATED_DAILY_CHANGE_RATE = 0.002
 news_agg = NewsAggregator(os.getenv("FINNHUB_API_KEY", ""))
 
 
@@ -159,7 +226,32 @@ with st.sidebar:
 
     score_alert = st.slider("이상 알림 점수 기준", 0, 100, 45)
 
-symbols = selected + [s.strip().upper() for s in custom.split(",") if s.strip()]
+custom_symbols = [s.strip().upper() for s in custom.split(",") if s.strip()]
+symbols = selected + custom_symbols
+
+if custom_symbols:
+    existing_watchlist = load_watchlist()
+    existing = {str(t).upper() for t in existing_watchlist["ticker"].tolist()}
+    additions = []
+    for ticker in sorted(set(custom_symbols)):
+        if ticker in existing:
+            continue
+        meta = ticker_meta_map.get(ticker, {})
+        additions.append(
+            {
+                "ticker": ticker,
+                "company_name_ko": str(meta.get("company_name_ko", "") or ""),
+                "company_name_en": str(meta.get("company_name_en", ticker) or ticker),
+                "exchange": str(meta.get("exchange", meta.get("market", "UNKNOWN")) or "UNKNOWN"),
+                "sector": str(meta.get("sector", "MARKET") or "MARKET"),
+                "sub_sector": str(meta.get("sub_sector", "General") or "General"),
+            }
+        )
+    if additions:
+        updated_watchlist = pd.concat([existing_watchlist, pd.DataFrame(additions)], ignore_index=True)
+        save_watchlist(updated_watchlist)
+        st.info(f"직접 추가한 {len(additions)}개 종목을 watchlist에 저장했습니다.")
+
 portfolio = build_portfolio_dataframe(symbols, {"AI": ai_weights, "SPACE": space_weights, "MARKET": market_weights})
 
 if portfolio.empty:
@@ -171,13 +263,34 @@ if not alert_df.empty:
     names = alert_df.apply(_display_name, axis=1).tolist()
     st.error(f"⚠️ 이상알림: {', '.join(names)} 점수 {score_alert} 이하")
 
-col1, col2, col3 = st.columns(3)
+summary_df = portfolio[portfolio["ticker"].isin(set(holdings_data.keys()))].copy()
+if not summary_df.empty:
+    summary_df["purchase_price"] = summary_df["ticker"].apply(lambda t: float(holdings_data.get(t, {}).get("purchase_price", 0) or 0))
+    summary_df["quantity"] = summary_df["ticker"].apply(lambda t: float(holdings_data.get(t, {}).get("quantity", 0) or 0))
+    summary_df["cost"] = summary_df["purchase_price"] * summary_df["quantity"]
+    summary_df["current_value"] = pd.to_numeric(summary_df["current_price"], errors="coerce") * summary_df["quantity"]
+    summary_df["pnl"] = summary_df["current_value"] - summary_df["cost"]
+    total_cost = float(summary_df["cost"].sum())
+    total_value = float(summary_df["current_value"].sum())
+    total_pnl = float(summary_df["pnl"].sum())
+else:
+    total_cost = total_value = total_pnl = 0.0
+total_return = ((total_pnl / total_cost) * 100) if total_cost > 0 else 0.0
+
+col1, col2, col3, col4 = st.columns(4)
 with col1:
-    st.metric("Total Symbols", len(portfolio))
+    st.metric("총자산", f"{_format_currency(total_value)}원")
 with col2:
-    st.metric("Average Score", _format_number(portfolio["score"].mean()))
+    st.metric("평가손익", f"{_format_currency(total_pnl)}원")
 with col3:
-    st.metric("Average Return (%)", _average_return_for_held(portfolio, holdings_data))
+    st.metric("수익률", f"{total_return:+.1f}%")
+with col4:
+    estimated_daily_change_pct = ESTIMATED_DAILY_CHANGE_RATE * 100
+    st.metric(
+        "일일 변화(추정)",
+        f"{_format_currency(total_value * ESTIMATED_DAILY_CHANGE_RATE)}원",
+        delta=f"{estimated_daily_change_pct:+.1f}%",
+    )
 
 st.subheader("보유 정보 입력")
 held_selection = st.multiselect(
@@ -216,31 +329,56 @@ if st.button("보유정보 저장"):
 st.subheader("보유/미보유 통합 테이블")
 table_df = portfolio.copy()
 held_set = set(holdings_data.keys())
-table_df["보유여부"] = table_df["ticker"].apply(lambda t: "보유" if t in held_set else "미보유")
+table_df["보유여부"] = table_df["ticker"].apply(lambda t: "✅" if t in held_set else "❌")
 table_df["종목명(한글)"] = table_df.apply(_display_name_ko, axis=1)
 table_df["매입가"] = table_df["ticker"].apply(lambda t: float(holdings_data.get(t, {}).get("purchase_price", 0) or 0) if t in held_set else pd.NA)
 table_df["보유수량"] = table_df["ticker"].apply(lambda t: float(holdings_data.get(t, {}).get("quantity", 0) or 0) if t in held_set else pd.NA)
 table_df["현재가"] = pd.to_numeric(table_df["current_price"], errors="coerce")
+table_df["평가손익"] = (table_df["현재가"] - table_df["매입가"]) * table_df["보유수량"]
 table_df["수익률(%)"] = ((table_df["현재가"] - table_df["매입가"]) / table_df["매입가"].replace(0, pd.NA)) * 100
 table_df["메모"] = table_df["ticker"].apply(lambda t: str(notes_data.get(t, "")))
-table_df["신호"] = table_df.apply(lambda r: recommendation_from_score(float(r["score"]), held=r["ticker"] in held_set), axis=1)
+table_df["신호"] = table_df["score"].apply(lambda s: _daily_signal(float(s)))
 table_df.rename(columns={"ticker": "TICKER", "score": "스코어", "sector": "섹터", "sub_sector": "소섹터"}, inplace=True)
 
 metric_columns = {
     "pe_ratio": "P/E",
     "peg_ratio": "PEG",
-    "revenue_growth_yoy": "Revenue Growth",
-    "rd_ratio": "R&D Ratio",
+    "revenue_growth_yoy": "Revenue Growth(%)",
+    "rd_ratio": "R&D Ratio(%)",
     "asset_turnover": "Asset Turnover",
     "tech_cycle": "Tech Cycle",
     "pb_ratio": "P/B",
-    "operating_margin": "Operating Margin",
-    "debt_ratio": "Debt Ratio",
-    "dividend_yield": "Dividend Yield",
+    "operating_margin": "Operating Margin(%)",
+    "debt_ratio": "Debt Ratio(%)",
+    "dividend_yield": "Dividend Yield(%)",
     "backlog_proxy": "Backlog Proxy",
     "gov_cycle": "Gov Cycle",
 }
 table_df.rename(columns=metric_columns, inplace=True)
+
+for percent_col in ["Revenue Growth(%)", "R&D Ratio(%)", "Operating Margin(%)", "Debt Ratio(%)", "Dividend Yield(%)"]:
+    if percent_col in table_df.columns:
+        table_df[percent_col] = pd.to_numeric(table_df[percent_col], errors="coerce") * 100
+
+sort_col, filter_col = st.columns(2)
+with sort_col:
+    sort_key = st.selectbox("정렬", ["수익률(%)", "스코어", "신호", "섹터"], index=0)
+with filter_col:
+    filter_key = st.selectbox("필터", ["전체", "보유만", "미보유만", "진입 신호만"], index=0)
+
+if filter_key == "보유만":
+    table_df = table_df[table_df["보유여부"] == "✅"]
+elif filter_key == "미보유만":
+    table_df = table_df[table_df["보유여부"] == "❌"]
+elif filter_key == "진입 신호만":
+    table_df = table_df[table_df["신호"].str.contains("진입", na=False)]
+
+if sort_key == "신호":
+    signal_rank = {"🟢 진입": 0, "🟡 관찰": 1, "🟠 주의": 2, "🔴 회피": 3}
+    table_df["__signal_rank"] = table_df["신호"].map(signal_rank).fillna(99)
+    table_df = table_df.sort_values(["__signal_rank", "스코어"], ascending=[True, False]).drop(columns=["__signal_rank"])
+elif sort_key in table_df.columns:
+    table_df = table_df.sort_values(sort_key, ascending=False, na_position="last")
 
 unified_columns = [
     "보유여부",
@@ -251,19 +389,20 @@ unified_columns = [
     "매입가",
     "보유수량",
     "현재가",
+    "평가손익",
     "수익률(%)",
     "메모",
     "스코어",
     "P/E",
     "PEG",
-    "Revenue Growth",
-    "R&D Ratio",
+    "Revenue Growth(%)",
+    "R&D Ratio(%)",
     "Asset Turnover",
     "Tech Cycle",
     "P/B",
-    "Operating Margin",
-    "Debt Ratio",
-    "Dividend Yield",
+    "Operating Margin(%)",
+    "Debt Ratio(%)",
+    "Dividend Yield(%)",
     "Backlog Proxy",
     "Gov Cycle",
     "신호",
@@ -276,14 +415,14 @@ non_numeric_unified_columns = {"보유여부", "종목명(한글)", "TICKER", "�
 column_config = {
     "P/E": st.column_config.NumberColumn(help="주가수익비율"),
     "PEG": st.column_config.NumberColumn(help="P/E 대비 성장률 보정 지표"),
-    "Revenue Growth": st.column_config.NumberColumn(help="전년 동기 대비 매출 성장률"),
-    "R&D Ratio": st.column_config.NumberColumn(help="매출 대비 연구개발비 비율"),
+    "Revenue Growth(%)": st.column_config.NumberColumn(help="전년 동기 대비 매출 성장률"),
+    "R&D Ratio(%)": st.column_config.NumberColumn(help="매출 대비 연구개발비 비율"),
     "Asset Turnover": st.column_config.NumberColumn(help="총자산 대비 매출 효율"),
     "Tech Cycle": st.column_config.NumberColumn(help="52주 수익률 기반 기술 사이클"),
     "P/B": st.column_config.NumberColumn(help="주가순자산비율"),
-    "Operating Margin": st.column_config.NumberColumn(help="영업이익률"),
-    "Debt Ratio": st.column_config.NumberColumn(help="부채비율"),
-    "Dividend Yield": st.column_config.NumberColumn(help="배당수익률"),
+    "Operating Margin(%)": st.column_config.NumberColumn(help="영업이익률"),
+    "Debt Ratio(%)": st.column_config.NumberColumn(help="부채비율"),
+    "Dividend Yield(%)": st.column_config.NumberColumn(help="배당수익률"),
     "Backlog Proxy": st.column_config.NumberColumn(help="수주/파이프라인 대체지표"),
     "Gov Cycle": st.column_config.NumberColumn(help="정부 지출 사이클 민감도"),
 }
@@ -292,23 +431,31 @@ try:
         table_df[unified_columns]
         .style.apply(_row_background_style, axis=1)
         .applymap(_return_style, subset=["수익률(%)"])
+        .applymap(lambda v: _metric_value_style(v, "P/E"), subset=["P/E"])
+        .applymap(lambda v: _metric_value_style(v, "PEG"), subset=["PEG"])
+        .applymap(lambda v: _metric_value_style(v, "Revenue Growth(%)"), subset=["Revenue Growth(%)"])
+        .applymap(lambda v: _metric_value_style(v, "R&D Ratio(%)"), subset=["R&D Ratio(%)"])
+        .applymap(lambda v: _metric_value_style(v, "Operating Margin(%)"), subset=["Operating Margin(%)"])
+        .applymap(lambda v: _metric_value_style(v, "Debt Ratio(%)"), subset=["Debt Ratio(%)"])
+        .applymap(lambda v: _metric_value_style(v, "Dividend Yield(%)"), subset=["Dividend Yield(%)"])
         .format(
             {
-                "매입가": "{:.2f}",
+                "매입가": _format_currency,
                 "보유수량": "{:.2f}",
-                "현재가": "{:.2f}",
-                "수익률(%)": "{:.2f}",
+                "현재가": _format_currency,
+                "평가손익": _format_currency,
+                "수익률(%)": lambda v: "-" if pd.isna(v) else f"{float(v):+.1f}%",
                 "스코어": "{:.2f}",
                 "P/E": "{:.2f}",
                 "PEG": "{:.2f}",
-                "Revenue Growth": "{:.2f}",
-                "R&D Ratio": "{:.2f}",
+                "Revenue Growth(%)": lambda v: "-" if pd.isna(v) else f"{float(v):.1f}%",
+                "R&D Ratio(%)": lambda v: "-" if pd.isna(v) else f"{float(v):.1f}%",
                 "Asset Turnover": "{:.2f}",
                 "Tech Cycle": "{:.2f}",
                 "P/B": "{:.2f}",
-                "Operating Margin": "{:.2f}",
-                "Debt Ratio": "{:.2f}",
-                "Dividend Yield": "{:.2f}",
+                "Operating Margin(%)": lambda v: "-" if pd.isna(v) else f"{float(v):.1f}%",
+                "Debt Ratio(%)": lambda v: "-" if pd.isna(v) else f"{float(v):.1f}%",
+                "Dividend Yield(%)": lambda v: "-" if pd.isna(v) else f"{float(v):.1f}%",
                 "Backlog Proxy": "{:.2f}",
                 "Gov Cycle": "{:.2f}",
             },
@@ -320,7 +467,14 @@ except AttributeError:
     fallback_df = table_df[unified_columns].copy()
     for c in fallback_df.columns:
         if c not in non_numeric_unified_columns:
-            fallback_df[c] = fallback_df[c].apply(_format_number)
+            if c in {"매입가", "현재가", "평가손익"}:
+                fallback_df[c] = fallback_df[c].apply(_format_currency)
+            elif c in {"수익률(%)"}:
+                fallback_df[c] = fallback_df[c].apply(lambda v: "-" if pd.isna(v) else f"{float(v):+.1f}%")
+            elif c in {"Revenue Growth(%)", "R&D Ratio(%)", "Operating Margin(%)", "Debt Ratio(%)", "Dividend Yield(%)"}:
+                fallback_df[c] = fallback_df[c].apply(lambda v: "-" if pd.isna(v) else f"{float(v):.1f}%")
+            else:
+                fallback_df[c] = fallback_df[c].apply(_format_number)
     st.dataframe(fallback_df.fillna("-"), use_container_width=True, hide_index=True)
 
 selected_ticker_for_note = st.selectbox("메모 수정 종목", portfolio["ticker"].tolist(), format_func=lambda t: ticker_label_map.get(t, t))
@@ -330,57 +484,16 @@ if st.button("메모 저장"):
     save_notes(notes_data)
     st.success("메모를 저장했습니다.")
 
-st.subheader("재무 지표 테이블")
-display_columns = [
-    "company_name_en",
-    "ticker",
-    "market",
-    "sector",
-    "sub_sector",
-    "score",
-    "signal",
-    "sector_rank",
-    "pe_ratio",
-    "peg_ratio",
-    "revenue_growth_yoy",
-    "rd_ratio",
-    "asset_turnover",
-    "tech_cycle",
-    "pb_ratio",
-    "operating_margin",
-    "debt_ratio",
-    "dividend_yield",
-    "backlog_proxy",
-    "gov_cycle",
+st.subheader("📊 포트폴리오 일일 체크")
+daily_checks = [
+    ("신규 매수 기회", len(table_df[table_df["신호"].str.contains("진입", na=False)]) > 0),
+    ("손절 필요 (손실률 -5% 이하)", len(table_df[pd.to_numeric(table_df["수익률(%)"], errors="coerce") <= -5]) > 0),
+    ("수익실현 후보 (수익률 +10% 이상)", len(table_df[pd.to_numeric(table_df["수익률(%)"], errors="coerce") >= 10]) > 0),
+    ("섹터별 리밸런싱 점검", True),
+    ("주요 뉴스 확인", True),
 ]
-column_labels = {
-    "company_name_en": "Company Name",
-    "ticker": "TICKER",
-    "market": "Exchange",
-    "sector": "Sector",
-    "sub_sector": "Sub Sector",
-    "score": "Score",
-    "signal": "Signal",
-    "sector_rank": "Sector Rank",
-    "pe_ratio": "P/E Ratio",
-    "peg_ratio": "PEG Ratio",
-    "revenue_growth_yoy": "YoY Revenue Growth",
-    "rd_ratio": "R&D / Revenue",
-    "asset_turnover": "Asset Turnover",
-    "tech_cycle": "Tech Cycle Position",
-    "pb_ratio": "P/B Ratio",
-    "operating_margin": "Operating Margin",
-    "debt_ratio": "Debt Ratio",
-    "dividend_yield": "Dividend Yield",
-    "backlog_proxy": "Contract Pipeline (Proxy)",
-    "gov_cycle": "Gov Spending Cycle (Proxy)",
-}
-display_df = portfolio[[c for c in display_columns if c in portfolio.columns]].copy()
-non_numeric_columns = {"company_name_en", "ticker", "market", "sector", "sub_sector", "signal"}
-for c in display_df.columns:
-    if c not in non_numeric_columns:
-        display_df[c] = display_df[c].apply(_format_number)
-st.dataframe(display_df.rename(columns=column_labels), use_container_width=True, hide_index=True)
+for label, checked in daily_checks:
+    st.markdown(f"{'✅' if checked else '☑️'} {label}")
 
 with st.expander("Metric Definitions", expanded=False):
     for metric_name, metric_desc in METRIC_HELP.items():
