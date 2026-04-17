@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import re
 from collections import Counter
@@ -13,6 +14,20 @@ POSITIVE_WORDS = {"beat", "growth", "surge", "win", "record", "upgrade", "strong
 NEGATIVE_WORDS = {"miss", "fall", "drop", "risk", "downgrade", "loss", "delay", "lawsuit", "weak"}
 POSITIVE_PATTERN = re.compile(rf"\b({'|'.join(re.escape(w) for w in POSITIVE_WORDS)})\b", re.IGNORECASE)
 NEGATIVE_PATTERN = re.compile(rf"\b({'|'.join(re.escape(w) for w in NEGATIVE_WORDS)})\b", re.IGNORECASE)
+LOGGER = logging.getLogger(__name__)
+
+SECTOR_NEWS_SYMBOLS = {
+    "Technology": ["MSFT", "NVDA", "TSM"],
+    "Communication Services": ["META", "GOOGL", "NFLX"],
+    "Healthcare": ["LLY", "JNJ", "PFE"],
+    "Financial": ["JPM", "BAC", "MS"],
+    "Industrials": ["BA", "LMT", "CAT"],
+    "Energy": ["XOM", "CVX", "COP"],
+    "Materials": ["RIO", "BHP", "FCX"],
+    "Utilities": ["NEE", "DUK", "SO"],
+    "Consumer Defensive": ["KO", "PG", "WMT"],
+    "Consumer Cyclical": ["TSLA", "AMZN", "HD"],
+}
 
 
 def _sentiment_label(headline: str, summary: str) -> str:
@@ -26,33 +41,63 @@ def _sentiment_label(headline: str, summary: str) -> str:
     return "Neutral"
 
 
-def recent_news(ticker: str, keyword: str = "", months: int = 3) -> List[Dict[str, str]]:
-    api_key = os.getenv("FINNHUB_API_KEY", "")
-    if not api_key:
-        return []
+class NewsAggregator:
+    def __init__(self, finnhub_key: str | None):
+        self.finnhub_key = finnhub_key or ""
+        self.finnhub_url = "https://finnhub.io/api/v1/company-news"
 
-    now = datetime.now(timezone.utc)
-    start = now - timedelta(days=30 * max(1, months))
+    def _fetch_company_news(self, symbol: str, days: int) -> List[Dict]:
+        if not self.finnhub_key:
+            return []
 
-    try:
-        response = requests.get(
-            "https://finnhub.io/api/v1/company-news",
-            params={
-                "symbol": ticker.upper(),
-                "from": start.date().isoformat(),
-                "to": now.date().isoformat(),
-                "token": api_key,
-            },
-            timeout=10,
+        now = datetime.now(timezone.utc)
+        from_date = (now - timedelta(days=max(1, days))).date().isoformat()
+        to_date = now.date().isoformat()
+        try:
+            response = requests.get(
+                self.finnhub_url,
+                params={
+                    "symbol": symbol.upper(),
+                    "from": from_date,
+                    "to": to_date,
+                    "token": self.finnhub_key,
+                },
+                timeout=8,
+            )
+            response.raise_for_status()
+            data = response.json()
+            return data if isinstance(data, list) else []
+        except Exception as exc:
+            LOGGER.warning("Failed to fetch news for %s: %s", symbol, exc)
+            return []
+
+    def get_stock_news(self, symbol: str, days: int = 7) -> List[Dict]:
+        """Get raw Finnhub news for a specific stock."""
+        return self._fetch_company_news(symbol, days)
+
+    def get_sector_news(self, sector: str, days: int = 7) -> List[Dict]:
+        """Get aggregated sector news using representative symbols."""
+        symbols = SECTOR_NEWS_SYMBOLS.get(sector, [])
+        if not symbols:
+            symbols = [sector]
+
+        merged: Dict[str, Dict] = {}
+        for symbol in symbols[:3]:
+            for item in self._fetch_company_news(symbol, days):
+                if not isinstance(item, dict):
+                    continue
+                key = str(item.get("id") or item.get("url") or item.get("headline") or "")
+                if key and key not in merged:
+                    merged[key] = item
+
+        return sorted(
+            merged.values(),
+            key=lambda x: int(x.get("datetime", 0) or 0),
+            reverse=True,
         )
-        response.raise_for_status()
-        payload = response.json()
-    except (requests.RequestException, ValueError):
-        return []
 
-    if not isinstance(payload, list):
-        return []
 
+def _to_dashboard_rows(payload: List[Dict], keyword: str = "") -> List[Dict[str, str]]:
     needle = keyword.strip().lower()
     rows: List[Dict[str, str]] = []
     for item in payload:
@@ -63,7 +108,6 @@ def recent_news(ticker: str, keyword: str = "", months: int = 3) -> List[Dict[st
         content = f"{headline} {summary}".lower()
         if needle and needle not in content:
             continue
-
         rows.append(
             {
                 "datetime": datetime.fromtimestamp(int(item.get("datetime", 0)), tz=timezone.utc).strftime("%Y-%m-%d"),
@@ -75,6 +119,18 @@ def recent_news(ticker: str, keyword: str = "", months: int = 3) -> List[Dict[st
             }
         )
     return rows
+
+
+def recent_news(ticker: str, keyword: str = "", months: int = 3) -> List[Dict[str, str]]:
+    api_key = os.getenv("FINNHUB_API_KEY", "")
+    payload = NewsAggregator(api_key).get_stock_news(ticker, days=max(1, months) * 30)
+    return _to_dashboard_rows(payload, keyword=keyword)
+
+
+def recent_sector_news(sector: str, days: int = 7) -> List[Dict[str, str]]:
+    api_key = os.getenv("FINNHUB_API_KEY", "")
+    payload = NewsAggregator(api_key).get_sector_news(sector, days=days)
+    return _to_dashboard_rows(payload)
 
 
 def extract_keywords(news_rows: List[Dict[str, str]], top_n: int = 8) -> List[Dict[str, Union[str, int]]]:

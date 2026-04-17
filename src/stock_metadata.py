@@ -35,11 +35,40 @@ BASE_METADATA: Dict[str, Dict[str, str]] = {
 }
 
 
+def _build_stock_metadata() -> Dict[str, Dict[str, str]]:
+    merged: Dict[str, Dict[str, str]] = {}
+    for row in load_watchlist().to_dict(orient="records"):
+        ticker = _normalize_symbol(str(row.get("ticker", "")))
+        if not ticker:
+            continue
+        merged[ticker] = {
+            "name_ko": str(row.get("company_name_ko") or ""),
+            "name_en": str(row.get("company_name_en") or row.get("company_name") or ticker),
+            "sector": str(row.get("sector") or "Unknown"),
+            "sub_sector": str(row.get("sub_sector") or "Unknown"),
+            "market": str(row.get("exchange") or row.get("market") or "UNKNOWN").upper(),
+        }
+
+    for ticker, payload in BASE_METADATA.items():
+        if ticker not in merged:
+            merged[ticker] = {
+                "name_ko": "",
+                "name_en": payload.get("company_name", ticker),
+                "sector": payload.get("sector", "Unknown"),
+                "sub_sector": payload.get("sub_sector", "Unknown"),
+                "market": payload.get("market", "UNKNOWN"),
+            }
+    return merged
+
+
 def _normalize_symbol(symbol: str) -> str:
     symbol = symbol.upper().strip()
     if symbol.endswith(".KS") or symbol.endswith(".KQ"):
         return symbol.split(".")[0]
     return symbol
+
+
+STOCK_METADATA: Dict[str, Dict[str, str]] = _build_stock_metadata()
 
 
 _WATCHLIST_CACHE: Dict[str, object] = {"mtime": None, "data": {}}

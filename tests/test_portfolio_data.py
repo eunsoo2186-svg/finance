@@ -4,7 +4,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from portfolio_data import MetricSpec, normalize_metric, score_stock, signal_from_score
+from portfolio_data import MetricSpec, build_portfolio_dataframe, get_sector_info, normalize_metric, score_stock, signal_from_score
 
 BUY_SIGNAL = "진입"
 HOLD_SIGNAL = "보유"
@@ -46,6 +46,45 @@ class PortfolioDataTests(unittest.TestCase):
             self.assertGreaterEqual(value, 0.0)
             self.assertLessEqual(value, 1.0)
         self.assertIn(signal_from_score(score), {BUY_SIGNAL, HOLD_SIGNAL, SELL_SIGNAL})
+
+    @unittest.mock.patch("portfolio_data._ticker_info", return_value={})
+    @unittest.mock.patch(
+        "portfolio_data.metadata_for_ticker",
+        return_value={
+            "company_name": "Sample",
+            "company_name_ko": "샘플",
+            "company_name_en": "Sample",
+            "sector": "Technology",
+            "sub_sector": "Software",
+            "market": "NASDAQ",
+        },
+    )
+    @unittest.mock.patch(
+        "portfolio_data.stock_metrics",
+        return_value={
+            "pe_ratio": 20.0,
+            "revenue_growth_yoy": 0.2,
+            "asset_turnover": 0.8,
+            "debt_ratio": 0.3,
+            "dividend_yield": 0.01,
+            "tech_cycle": 0.2,
+            "current_price": 100.0,
+        },
+    )
+    @unittest.mock.patch("portfolio_data.get_sector", return_value="MARKET")
+    @unittest.mock.patch("portfolio_data.get_sector_info", return_value=("Technology", "Software"))
+    def test_dataframe_contains_all_metrics_and_sector_display(self, *_):
+        df = build_portfolio_dataframe(["MSFT"])
+        self.assertEqual(df.loc[0, "sector"], "Technology")
+        self.assertEqual(df.loc[0, "sub_sector"], "Software")
+        self.assertIn("peg_ratio", df.columns)
+        self.assertIn("peg_ratio_normalized", df.columns)
+        self.assertNotIn("current_price_normalized", df.columns)
+
+    def test_get_sector_info_prefers_stock_metadata(self):
+        sector, sub_sector = get_sector_info("MSFT")
+        self.assertTrue(sector)
+        self.assertTrue(sub_sector)
 
 
 if __name__ == "__main__":
