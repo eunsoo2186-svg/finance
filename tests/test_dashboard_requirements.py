@@ -60,6 +60,8 @@ class DashboardRequirementTests(unittest.TestCase):
         self.assertIn("ticker", watchlist.columns)
         self.assertIn("company_name_ko", watchlist.columns)
         self.assertIn("company_name_en", watchlist.columns)
+        tickers = set(watchlist["ticker"].tolist())
+        self.assertTrue({"ASTS", "APP", "ALM"}.issubset(tickers))
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             temp_path = Path(tmp_dir) / "holdings.json"

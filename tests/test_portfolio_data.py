@@ -15,6 +15,7 @@ from portfolio_data import (
     normalize_metric,
     score_stock,
     signal_from_score,
+    stock_metrics,
 )
 
 BUY_SIGNAL = "진입"
@@ -144,6 +145,15 @@ class PortfolioDataTests(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["ticker"], "AAPL")
         self.assertEqual(rows[0]["company_name_en"], "Apple")
+
+    @patch("portfolio_data._finnhub_metrics", return_value={})
+    @patch("portfolio_data._ticker_object")
+    @patch("portfolio_data._ticker_info", return_value={"trailingPE": 20.0, "pegRatio": 1.2})
+    @patch("portfolio_data.metadata_for_ticker", return_value={"market": "NASDAQ"})
+    def test_market_stock_metrics_include_peg_ratio(self, *_):
+        metrics = stock_metrics("MSFT", "MARKET")
+        self.assertIn("peg_ratio", metrics)
+        self.assertEqual(metrics["peg_ratio"], 1.2)
 
 
 if __name__ == "__main__":

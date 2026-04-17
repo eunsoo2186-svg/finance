@@ -122,6 +122,44 @@ def load_watchlist_tickers() -> List[str]:
     return df["ticker"].tolist()
 
 
+def save_watchlist(df: pd.DataFrame) -> None:
+    payload = df.copy()
+    if "ticker" not in payload.columns:
+        return
+    if "exchange" not in payload.columns and "market" in payload.columns:
+        payload["exchange"] = payload["market"]
+    if "company_name_en" not in payload.columns and "company_name" in payload.columns:
+        payload["company_name_en"] = payload["company_name"]
+    if "company_name_ko" not in payload.columns:
+        payload["company_name_ko"] = ""
+    if "sector" not in payload.columns:
+        payload["sector"] = "MARKET"
+    if "sub_sector" not in payload.columns:
+        payload["sub_sector"] = "General"
+
+    payload["ticker"] = payload["ticker"].apply(_normalize_ticker)
+    payload["exchange"] = payload["exchange"].fillna("UNKNOWN").astype(str).str.upper().str.strip()
+    payload["market"] = payload["exchange"]
+    payload["company_name_ko"] = payload["company_name_ko"].fillna("").astype(str).str.strip()
+    payload["company_name_en"] = payload["company_name_en"].fillna("").astype(str).str.strip()
+    payload["company_name"] = [
+        _select_display_name(ko, en, ticker)
+        for ko, en, ticker in zip(payload["company_name_ko"], payload["company_name_en"], payload["ticker"])
+    ]
+    payload["sector"] = payload["sector"].fillna("MARKET").astype(str).str.strip()
+    payload["sub_sector"] = payload["sub_sector"].fillna("General").astype(str).str.strip()
+
+    payload = (
+        payload[WATCHLIST_COLUMNS]
+        .dropna(subset=["ticker"])
+        .drop_duplicates(subset=["ticker"])
+        .sort_values("ticker")
+        .reset_index(drop=True)
+    )
+    WATCHLIST_PATH.parent.mkdir(parents=True, exist_ok=True)
+    payload.to_csv(WATCHLIST_PATH, index=False)
+
+
 def load_favorites() -> List[str]:
     raw = _read_json(FAVORITES_PATH)
     favorites = raw.get("favorites", []) if isinstance(raw, dict) else []
