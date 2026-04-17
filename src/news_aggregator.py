@@ -3,11 +3,11 @@ from __future__ import annotations
 import logging
 import os
 import re
+import html
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from typing import Dict, List, Union
-from xml.etree import ElementTree
 
 import requests
 
@@ -34,6 +34,11 @@ MAX_SECTOR_NEWS_SYMBOLS = 3
 # Keep request latency bounded for interactive dashboard refreshes.
 FINNHUB_REQUEST_TIMEOUT = 8
 GOOGLE_NEWS_RSS_URL = "https://news.google.com/rss/search"
+RSS_ITEM_PATTERN = re.compile(r"<item>(.*?)</item>", re.DOTALL | re.IGNORECASE)
+RSS_TAG_PATTERN_TEMPLATE = r"<{tag}>(.*?)</{tag}>"
+RSS_TITLE_PATTERN = re.compile(RSS_TAG_PATTERN_TEMPLATE.format(tag="title"), re.DOTALL | re.IGNORECASE)
+RSS_LINK_PATTERN = re.compile(RSS_TAG_PATTERN_TEMPLATE.format(tag="link"), re.DOTALL | re.IGNORECASE)
+RSS_PUBDATE_PATTERN = re.compile(RSS_TAG_PATTERN_TEMPLATE.format(tag="pubDate"), re.DOTALL | re.IGNORECASE)
 
 
 def _sentiment_label(headline: str, summary: str) -> str:
@@ -86,17 +91,20 @@ class NewsAggregator:
                 timeout=FINNHUB_REQUEST_TIMEOUT,
             )
             response.raise_for_status()
-            root = ElementTree.fromstring(response.text)
+            raw_rss = response.text
         except Exception as exc:
             LOGGER.warning("Failed to fetch Google RSS for %s: %s", symbol, exc)
             return []
 
         cutoff = datetime.now(timezone.utc) - timedelta(days=max(1, days))
         rows: List[Dict] = []
-        for item in root.findall("./channel/item"):
-            title = (item.findtext("title") or "").strip()
-            link = (item.findtext("link") or "").strip()
-            pub_date_raw = (item.findtext("pubDate") or "").strip()
+        for item_block in RSS_ITEM_PATTERN.findall(raw_rss):
+            title_match = RSS_TITLE_PATTERN.search(item_block)
+            link_match = RSS_LINK_PATTERN.search(item_block)
+            date_match = RSS_PUBDATE_PATTERN.search(item_block)
+            title = html.unescape((title_match.group(1) if title_match else "")).strip()
+            link = html.unescape((link_match.group(1) if link_match else "")).strip()
+            pub_date_raw = html.unescape((date_match.group(1) if date_match else "")).strip()
             if not title or not link:
                 continue
             try:

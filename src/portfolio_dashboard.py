@@ -190,25 +190,25 @@ def _get_hold_action(profit_rate: float | None, metrics: dict) -> dict[str, str]
     if profit_rate is None or pd.isna(profit_rate):
         return {"action": "🟢 홀딩", "reason": "보유 정보 부족"}
     pe = metrics.get("P/E")
-    peg = metrics.get("PEG")
+    peg = pd.to_numeric(metrics.get("PEG"), errors="coerce")
     if profit_rate < -5:
         return {"action": "🔴 손절 검토", "reason": f"손실률 {profit_rate:.1f}% | PE {pe if pd.notna(pe) else '-'} 점검"}
     if profit_rate > 15:
         return {"action": "🟡 부분 매도 검토", "reason": f"수익률 {profit_rate:.1f}% - 일부 수익 실현"}
-    if profit_rate < 0 and pd.notna(peg) and float(peg) < 1.0:
-        return {"action": "🟢 평균매수 기회", "reason": f"PEG {float(peg):.2f} 저평가 구간"}
+    if profit_rate < 0 and pd.notna(peg) and peg < 1.0:
+        return {"action": "🟢 평균매수 기회", "reason": f"PEG {peg:.2f} 저평가 구간"}
     return {"action": "🟢 홀딩", "reason": f"수익률 {profit_rate:.1f}% - 목표가까지 보유"}
 
 
 def _get_entry_signal(row: pd.Series) -> dict[str, str]:
     score = float(row.get("스코어") or 0)
-    peg = row.get("PEG")
-    pe = row.get("P/E")
-    growth = row.get("Revenue Growth(%)")
-    if pd.notna(peg) and float(peg) < 1.0:
-        return {"action": "🟢 강 진입", "reason": f"PEG {float(peg):.2f} < 1.0"}
-    if pd.notna(pe) and pd.notna(growth) and float(pe) < 20 and float(growth) > 12:
-        return {"action": "🟡 중 진입", "reason": f"PE {float(pe):.1f} / 성장률 {float(growth):.1f}%"}
+    peg = pd.to_numeric(row.get("PEG"), errors="coerce")
+    pe = pd.to_numeric(row.get("P/E"), errors="coerce")
+    growth = pd.to_numeric(row.get("Revenue Growth(%)"), errors="coerce")
+    if pd.notna(peg) and peg < 1.0:
+        return {"action": "🟢 강 진입", "reason": f"PEG {peg:.2f} < 1.0"}
+    if pd.notna(pe) and pd.notna(growth) and pe < 20 and growth > 12:
+        return {"action": "🟡 중 진입", "reason": f"PE {pe:.1f} / 성장률 {growth:.1f}%"}
     if score >= 70:
         return {"action": "🔵 관찰", "reason": f"스코어 {score:.0f}/100"}
     return {"action": "🟠 회피", "reason": "매수 신호 부족"}
@@ -686,7 +686,7 @@ for label, checked in daily_checks:
     st.markdown(f"{'✅' if checked else '☑️'} {label}")
 
 kr_missing = table_df[
-    table_df["거래소"].isin(["KOSPI", "KOSDAQ"])
+    table_df["거래소"].apply(_is_kr_exchange)
     & (table_df["P/E"].isna() | table_df["PEG"].isna())
 ]["TICKER"].tolist()
 if kr_missing:
