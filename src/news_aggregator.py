@@ -9,6 +9,19 @@ from typing import Dict, List, Union
 import requests
 
 ENGLISH_STOPWORDS = {"the", "and", "for", "with", "from", "stock", "shares", "will", "this", "that", "company"}
+POSITIVE_WORDS = {"beat", "growth", "surge", "win", "record", "upgrade", "strong", "profit", "optimistic"}
+NEGATIVE_WORDS = {"miss", "fall", "drop", "risk", "downgrade", "loss", "delay", "lawsuit", "weak"}
+
+
+def _sentiment_label(headline: str, summary: str) -> str:
+    text = f"{headline} {summary}".lower()
+    positive = sum(1 for w in POSITIVE_WORDS if w in text)
+    negative = sum(1 for w in NEGATIVE_WORDS if w in text)
+    if positive > negative:
+        return "Positive"
+    if negative > positive:
+        return "Negative"
+    return "Neutral"
 
 
 def recent_news(ticker: str, keyword: str = "", months: int = 3) -> List[Dict[str, str]]:
@@ -54,6 +67,8 @@ def recent_news(ticker: str, keyword: str = "", months: int = 3) -> List[Dict[st
                 "datetime": datetime.fromtimestamp(int(item.get("datetime", 0)), tz=timezone.utc).strftime("%Y-%m-%d"),
                 "source": str(item.get("source") or ""),
                 "headline": headline,
+                "summary": summary,
+                "sentiment": _sentiment_label(headline, summary),
                 "url": str(item.get("url") or ""),
             }
         )

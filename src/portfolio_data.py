@@ -45,13 +45,13 @@ class MetricSpec:
 
 METRIC_SPECS: Dict[str, Dict[str, MetricSpec]] = {
     "AI": {
-        "pe_ratio": MetricSpec("P/E Ratio / 주가수익비율", 8, 60, False, "yfinance.info.trailingPE", "trailingPE"),
-        "peg_ratio": MetricSpec("PEG Ratio / PEG 비율", 0.3, 3.0, False, "yfinance.info.pegRatio", "pegRatio"),
+        "pe_ratio": MetricSpec("P/E Ratio", 8, 60, False, "yfinance.info.trailingPE", "trailingPE"),
+        "peg_ratio": MetricSpec("PEG Ratio", 0.3, 3.0, False, "yfinance.info.pegRatio", "pegRatio"),
         "revenue_growth_yoy": MetricSpec(
-            "YoY Revenue Growth / 매출성장률", -0.2, 0.5, True, "yfinance.info.revenueGrowth", "revenueGrowth"
+            "YoY Revenue Growth", -0.2, 0.5, True, "yfinance.info.revenueGrowth", "revenueGrowth"
         ),
         "rd_ratio": MetricSpec(
-            "R&D / Revenue / 연구개발비율",
+            "R&D / Revenue",
             0.02,
             0.35,
             True,
@@ -59,25 +59,25 @@ METRIC_SPECS: Dict[str, Dict[str, MetricSpec]] = {
             "researchDevelopment / totalRevenue",
         ),
         "asset_turnover": MetricSpec(
-            "Asset Turnover / 자산회전율", 0.1, 1.5, True, "yfinance.info.totalRevenue,totalAssets", "totalRevenue / totalAssets"
+            "Asset Turnover", 0.1, 1.5, True, "yfinance.info.totalRevenue,totalAssets", "totalRevenue / totalAssets"
         ),
         "tech_cycle": MetricSpec(
-            "Tech Cycle Position / 기술사이클", -0.4, 0.8, True, "finnhub.stock.metric.52WeekPriceReturnDaily", "52WeekPriceReturnDaily"
+            "Tech Cycle Position", -0.4, 0.8, True, "finnhub.stock.metric.52WeekPriceReturnDaily", "52WeekPriceReturnDaily"
         ),
     },
     "SPACE": {
-        "pb_ratio": MetricSpec("P/B Ratio / 주가순자산비율", 0.5, 8.0, False, "yfinance.info.priceToBook", "priceToBook"),
+        "pb_ratio": MetricSpec("P/B Ratio", 0.5, 8.0, False, "yfinance.info.priceToBook", "priceToBook"),
         "operating_margin": MetricSpec(
-            "Operating Margin / 영업이익률", -0.1, 0.3, True, "yfinance.info.operatingMargins", "operatingMargins"
+            "Operating Margin", -0.1, 0.3, True, "yfinance.info.operatingMargins", "operatingMargins"
         ),
         "debt_ratio": MetricSpec(
-            "Debt Ratio / 부채비율", 0.1, 3.0, False, "yfinance.info.debtToEquity", "debtToEquity / 100"
+            "Debt Ratio", 0.1, 3.0, False, "yfinance.info.debtToEquity", "debtToEquity / 100"
         ),
         "dividend_yield": MetricSpec(
-            "Dividend Yield / 배당수익률", 0.0, 0.08, True, "yfinance.info.dividendYield", "dividendYield"
+            "Dividend Yield", 0.0, 0.08, True, "yfinance.info.dividendYield", "dividendYield"
         ),
         "backlog_proxy": MetricSpec(
-            "Contract Pipeline (Proxy) / 수주모멘텀",
+            "Contract Pipeline (Proxy)",
             -0.2,
             0.5,
             True,
@@ -85,25 +85,25 @@ METRIC_SPECS: Dict[str, Dict[str, MetricSpec]] = {
             "(sum of recent 4 quarters revenue / sum of previous 4 quarters revenue) - 1",
         ),
         "gov_cycle": MetricSpec(
-            "Gov Spending Cycle (Proxy) / 정책사이클", -0.3, 0.4, True, "finnhub.stock.metric.52WeekPriceReturnDaily", "52WeekPriceReturnDaily"
+            "Gov Spending Cycle (Proxy)", -0.3, 0.4, True, "finnhub.stock.metric.52WeekPriceReturnDaily", "52WeekPriceReturnDaily"
         ),
     },
     "MARKET": {
-        "pe_ratio": MetricSpec("P/E Ratio / 주가수익비율", 8, 60, False, "yfinance.info.trailingPE", "trailingPE"),
+        "pe_ratio": MetricSpec("P/E Ratio", 8, 60, False, "yfinance.info.trailingPE", "trailingPE"),
         "revenue_growth_yoy": MetricSpec(
-            "YoY Revenue Growth / 매출성장률", -0.2, 0.5, True, "yfinance.info.revenueGrowth", "revenueGrowth"
+            "YoY Revenue Growth", -0.2, 0.5, True, "yfinance.info.revenueGrowth", "revenueGrowth"
         ),
         "asset_turnover": MetricSpec(
-            "Asset Turnover / 자산회전율", 0.1, 1.5, True, "yfinance.info.totalRevenue,totalAssets", "totalRevenue / totalAssets"
+            "Asset Turnover", 0.1, 1.5, True, "yfinance.info.totalRevenue,totalAssets", "totalRevenue / totalAssets"
         ),
         "debt_ratio": MetricSpec(
-            "Debt Ratio / 부채비율", 0.1, 3.0, False, "yfinance.info.debtToEquity", "debtToEquity / 100"
+            "Debt Ratio", 0.1, 3.0, False, "yfinance.info.debtToEquity", "debtToEquity / 100"
         ),
         "dividend_yield": MetricSpec(
-            "Dividend Yield / 배당수익률", 0.0, 0.08, True, "yfinance.info.dividendYield", "dividendYield"
+            "Dividend Yield", 0.0, 0.08, True, "yfinance.info.dividendYield", "dividendYield"
         ),
         "tech_cycle": MetricSpec(
-            "Tech Cycle Position / 기술사이클", -0.4, 0.8, True, "finnhub.stock.metric.52WeekPriceReturnDaily", "52WeekPriceReturnDaily"
+            "Tech Cycle Position", -0.4, 0.8, True, "finnhub.stock.metric.52WeekPriceReturnDaily", "52WeekPriceReturnDaily"
         ),
     },
 }
@@ -168,6 +168,34 @@ def _ticker_info(symbol: str) -> Dict[str, object]:
 @lru_cache(maxsize=256)
 def _ticker_object(symbol: str) -> yf.Ticker:
     return yf.Ticker(symbol)
+
+
+def _resolve_data_symbol(symbol: str, market: str) -> str:
+    symbol = symbol.upper()
+    if symbol.endswith(".KS") or symbol.endswith(".KQ"):
+        return symbol
+    if market == "KOSPI":
+        return f"{symbol}.KS"
+    if market == "KOSDAQ":
+        return f"{symbol}.KQ"
+    return symbol
+
+
+def _krx_price_from_fdr(symbol: str) -> float | None:
+    try:
+        import FinanceDataReader as fdr  # type: ignore
+    except Exception:
+        return None
+    try:
+        frame = fdr.DataReader(symbol, start=(pd.Timestamp.today() - pd.Timedelta(days=7)).strftime("%Y-%m-%d"))
+    except Exception:
+        return None
+    if frame is None or frame.empty:
+        return None
+    close_series = pd.to_numeric(frame.get("Close"), errors="coerce").dropna()
+    if close_series.empty:
+        return None
+    return float(close_series.iloc[-1])
 
 
 def _safe_number(value, scale: float = 1.0) -> float | None:
@@ -259,13 +287,20 @@ def normalize_metric(value: float | None, spec: MetricSpec) -> float:
 
 def stock_metrics(symbol: str, sector: str) -> Dict[str, float | None]:
     symbol = symbol.upper()
-    ticker = _ticker_object(symbol)
-    info = _ticker_info(symbol)
-    finnhub = _finnhub_metrics(symbol)
+    meta = metadata_for_ticker(symbol, _ticker_info(symbol))
+    market = str(meta.get("market", "UNKNOWN")).upper()
+    data_symbol = _resolve_data_symbol(symbol, market)
+
+    ticker = _ticker_object(data_symbol)
+    info = _ticker_info(data_symbol)
+    finnhub = _finnhub_metrics(symbol if market in {"NASDAQ", "NYSE", "US"} else data_symbol)
 
     total_revenue = _safe_number(info.get("totalRevenue")) or _fallback_total_revenue(ticker)
     total_assets = _safe_number(info.get("totalAssets")) or _fallback_total_assets(ticker)
     rd_expense = _safe_number(info.get("researchDevelopment"))
+    current_price = _safe_number(info.get("currentPrice")) or _safe_number(info.get("regularMarketPrice"))
+    if current_price is None and market in {"KOSPI", "KOSDAQ"}:
+        current_price = _krx_price_from_fdr(symbol)
 
     rd_ratio = None
     if rd_expense is not None and total_revenue is not None and total_revenue != 0:
@@ -283,6 +318,7 @@ def stock_metrics(symbol: str, sector: str) -> Dict[str, float | None]:
             "rd_ratio": rd_ratio,
             "asset_turnover": asset_turnover,
             "tech_cycle": _safe_number(finnhub.get("52WeekPriceReturnDaily"), 0.01),
+            "current_price": current_price,
         }
 
     if sector == "SPACE":
@@ -293,6 +329,7 @@ def stock_metrics(symbol: str, sector: str) -> Dict[str, float | None]:
             "dividend_yield": _safe_number(info.get("dividendYield")),
             "backlog_proxy": _quarterly_revenue_growth(ticker),
             "gov_cycle": _safe_number(finnhub.get("52WeekPriceReturnDaily"), 0.01),
+            "current_price": current_price,
         }
 
     return {
@@ -302,6 +339,7 @@ def stock_metrics(symbol: str, sector: str) -> Dict[str, float | None]:
         "debt_ratio": _safe_number(info.get("debtToEquity"), 0.01),
         "dividend_yield": _safe_number(info.get("dividendYield")),
         "tech_cycle": _safe_number(finnhub.get("52WeekPriceReturnDaily"), 0.01),
+        "current_price": current_price,
     }
 
 
@@ -350,9 +388,11 @@ def build_portfolio_dataframe(symbols: Iterable[str], weight_overrides: Dict[str
         row: Dict[str, object] = {
             "ticker": symbol,
             "company_name": meta.get("company_name", symbol),
-            "ticker_display": f"{symbol} - {meta.get('company_name', symbol)}",
+            "company_name_ko": meta.get("company_name_ko", ""),
+            "company_name_en": meta.get("company_name_en", meta.get("company_name", symbol)),
+            "ticker_display": symbol,
             "sector": sector,
-            "sub_sector": meta.get("sub_sector", "기타"),
+            "sub_sector": meta.get("sub_sector", "General"),
             "market": meta.get("market", "UNKNOWN"),
             "score": score,
             "signal": signal_from_score(score),
@@ -379,7 +419,7 @@ def metric_basis_table(sector: str) -> pd.DataFrame:
                 "계산 근거": spec.formula,
                 "데이터 출처": spec.source,
                 "정규화 범위": f"{spec.min_value} ~ {spec.max_value}",
-                "평가 방향": "높을수록 좋음" if spec.higher_is_better else "낮을수록 좋음",
+                "평가 방향": "Higher is better" if spec.higher_is_better else "Lower is better",
             }
             for spec in specs.values()
         ]

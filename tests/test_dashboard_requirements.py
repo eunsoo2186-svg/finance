@@ -13,17 +13,29 @@ from watchlist_manager import load_watchlist, save_holdings, load_holdings
 
 class DashboardRequirementTests(unittest.TestCase):
     def test_recommendation_split_for_held_vs_unheld(self):
-        self.assertEqual(recommendation_from_score(80, held=True), "보유/추매 고려")
-        self.assertEqual(recommendation_from_score(80, held=False), "분할 매수 시점")
+        self.assertEqual(recommendation_from_score(80, held=True), "매도")
+        self.assertEqual(recommendation_from_score(60, held=True), "보유")
+        self.assertEqual(recommendation_from_score(50, held=True), "추매")
+        self.assertEqual(recommendation_from_score(30, held=True), "손절")
+        self.assertEqual(recommendation_from_score(80, held=False), "매수")
+        self.assertEqual(recommendation_from_score(60, held=False), "관심")
+        self.assertEqual(recommendation_from_score(30, held=False), "회피")
 
-    def test_metric_labels_include_korean(self):
+    def test_metric_labels_are_english_only(self):
         ai_basis = metric_basis_table("AI")
-        self.assertTrue(ai_basis["지표"].str.contains("/").any())
+        self.assertFalse(ai_basis["지표"].str.contains(r"[가-힣]").any())
 
     @patch("portfolio_data._ticker_info", return_value={})
     @patch(
         "portfolio_data.metadata_for_ticker",
-        return_value={"company_name": "Microsoft", "sector": "AI", "sub_sector": "LLM", "market": "NASDAQ"},
+        return_value={
+            "company_name": "Microsoft",
+            "company_name_ko": "마이크로소프트",
+            "company_name_en": "Microsoft",
+            "sector": "AI",
+            "sub_sector": "LLM",
+            "market": "NASDAQ",
+        },
     )
     @patch(
         "portfolio_data.stock_metrics",
@@ -40,19 +52,23 @@ class DashboardRequirementTests(unittest.TestCase):
     def test_dataframe_includes_ticker_display(self, *_):
         df = build_portfolio_dataframe(["MSFT"])
         self.assertIn("ticker_display", df.columns)
-        self.assertEqual(df.loc[0, "ticker_display"], "MSFT - Microsoft")
+        self.assertEqual(df.loc[0, "ticker_display"], "MSFT")
+        self.assertEqual(df.loc[0, "company_name_ko"], "마이크로소프트")
 
     def test_watchlist_loaded_and_holdings_persist(self):
         watchlist = load_watchlist()
         self.assertIn("ticker", watchlist.columns)
+        self.assertIn("company_name_ko", watchlist.columns)
+        self.assertIn("company_name_en", watchlist.columns)
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             temp_path = Path(tmp_dir) / "holdings.json"
-            payload = {"MSFT": {"purchase_price": 100.0, "quantity": 3, "currency": "USD"}}
+            payload = {"MSFT": {"purchase_price": 100.0, "quantity": 3, "currency": "USD", "target_price": 140.0}}
             with patch("watchlist_manager.HOLDINGS_PATH", temp_path):
                 save_holdings(payload)
                 loaded = load_holdings()
             self.assertIn("MSFT", loaded)
+            self.assertEqual(loaded["MSFT"]["target_price"], 140.0)
 
 
 if __name__ == "__main__":
