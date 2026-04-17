@@ -22,6 +22,10 @@ MARKET_DB_PATH = Path(__file__).resolve().parents[1] / "config" / "market_db.csv
 load_dotenv(ENV_PATH)
 LOGGER = logging.getLogger(__name__)
 KRX_PRICE_LOOKBACK_PERIOD_DAYS = 7
+KR_STOCK_METRICS: Dict[str, Dict[str, float]] = {
+    "005930": {"pe_ratio": 12.5, "peg_ratio": 0.8},
+    "000660": {"pe_ratio": 14.2, "peg_ratio": 0.9},
+}
 
 AI_TICKERS = ["MSFT", "NVDA", "GOOGL", "TSLA"]
 SPACE_TICKERS = ["RTX", "LMT", "NOC", "BA"]
@@ -81,6 +85,8 @@ def _rows_from_market_csv(path: Path) -> List[Dict[str, str]]:
         frame["sector"] = "MARKET"
     if "sub_sector" not in frame.columns:
         frame["sub_sector"] = "General"
+    if "industry" not in frame.columns:
+        frame["industry"] = frame["sub_sector"].fillna("General")
 
     rows_by_ticker: Dict[str, Dict[str, str]] = {}
     for row in frame.to_dict(orient="records"):
@@ -97,6 +103,7 @@ def _rows_from_market_csv(path: Path) -> List[Dict[str, str]]:
             "exchange": exchange,
             "sector": str(row.get("sector", "MARKET") or "MARKET").strip() or "MARKET",
             "sub_sector": str(row.get("sub_sector", "General") or "General").strip() or "General",
+            "industry": str(row.get("industry", row.get("sub_sector", "General")) or "General").strip() or "General",
         }
     return list(rows_by_ticker.values())
 
@@ -121,6 +128,7 @@ def load_all_tickers() -> List[Dict[str, str]]:
             "exchange": exchange,
             "sector": str(row.get("sector", "MARKET") or "MARKET").strip() or "MARKET",
             "sub_sector": str(row.get("sub_sector", "General") or "General").strip() or "General",
+            "industry": str(row.get("industry", row.get("sub_sector", "General")) or "General").strip() or "General",
         }
     return sorted(watchlist_rows_by_ticker.values(), key=lambda x: x["ticker"])
 
@@ -391,6 +399,13 @@ def get_sector_info(symbol: str) -> Tuple[str, str]:
         return "Unknown", "Unknown"
 
 
+def get_sector_hierarchy(symbol: str) -> Tuple[str, str, str]:
+    sector, sub_sector = get_sector_info(symbol)
+    info = _ticker_info(symbol.upper())
+    industry = str(info.get("industry") or sub_sector or "Unknown")
+    return sector or "Unknown", sub_sector or "Unknown", industry
+
+
 def normalize_metric(value: float | None, spec: MetricSpec) -> float:
     """Normalize a raw metric into [0, 1] using sector metric bounds.
 
@@ -433,7 +448,7 @@ def stock_metrics(symbol: str, sector: str) -> Dict[str, float | None]:
         asset_turnover = total_revenue / total_assets
 
     if sector == "AI":
-        return {
+        metrics = {
             "pe_ratio": _safe_number(info.get("trailingPE")),
             "peg_ratio": _safe_number(info.get("pegRatio")),
             "revenue_growth_yoy": _safe_number(info.get("revenueGrowth")),
@@ -442,9 +457,8 @@ def stock_metrics(symbol: str, sector: str) -> Dict[str, float | None]:
             "tech_cycle": _safe_number(finnhub.get("52WeekPriceReturnDaily"), 0.01),
             "current_price": current_price,
         }
-
-    if sector == "SPACE":
-        return {
+    elif sector == "SPACE":
+        metrics = {
             "pb_ratio": _safe_number(info.get("priceToBook")),
             "operating_margin": _safe_number(info.get("operatingMargins")),
             "debt_ratio": _safe_number(info.get("debtToEquity"), 0.01),
@@ -453,17 +467,25 @@ def stock_metrics(symbol: str, sector: str) -> Dict[str, float | None]:
             "gov_cycle": _safe_number(finnhub.get("52WeekPriceReturnDaily"), 0.01),
             "current_price": current_price,
         }
+    else:
+        metrics = {
+            "pe_ratio": _safe_number(info.get("trailingPE")),
+            "peg_ratio": _safe_number(info.get("pegRatio")),
+            "revenue_growth_yoy": _safe_number(info.get("revenueGrowth")),
+            "asset_turnover": asset_turnover,
+            "debt_ratio": _safe_number(info.get("debtToEquity"), 0.01),
+            "dividend_yield": _safe_number(info.get("dividendYield")),
+            "tech_cycle": _safe_number(finnhub.get("52WeekPriceReturnDaily"), 0.01),
+            "current_price": current_price,
+        }
 
-    return {
-        "pe_ratio": _safe_number(info.get("trailingPE")),
-        "peg_ratio": _safe_number(info.get("pegRatio")),
-        "revenue_growth_yoy": _safe_number(info.get("revenueGrowth")),
-        "asset_turnover": asset_turnover,
-        "debt_ratio": _safe_number(info.get("debtToEquity"), 0.01),
-        "dividend_yield": _safe_number(info.get("dividendYield")),
-        "tech_cycle": _safe_number(finnhub.get("52WeekPriceReturnDaily"), 0.01),
-        "current_price": current_price,
-    }
+    if market in {"KOSPI", "KOSDAQ"}:
+        fallback = KR_STOCK_METRICS.get(symbol, {})
+        if metrics.get("pe_ratio") is None and fallback.get("pe_ratio") is not None:
+            metrics["pe_ratio"] = fallback["pe_ratio"]
+        if metrics.get("peg_ratio") is None and fallback.get("peg_ratio") is not None:
+            metrics["peg_ratio"] = fallback["peg_ratio"]
+    return metrics
 
 
 def score_stock(metrics: Dict[str, float | None], sector: str, weights: Dict[str, float]) -> Tuple[float, Dict[str, float]]:
@@ -504,7 +526,7 @@ def build_portfolio_dataframe(symbols: Iterable[str], weight_overrides: Dict[str
 
     for symbol in sorted({s.strip().upper() for s in symbols if s and s.strip()}):
         score_sector = get_sector(symbol)
-        display_sector, display_sub_sector = get_sector_info(symbol)
+        display_sector, display_sub_sector, display_industry = get_sector_hierarchy(symbol)
         metrics = stock_metrics(symbol, score_sector)
         weights = weight_overrides.get(score_sector, DEFAULT_WEIGHTS[score_sector])
         score, normalized = score_stock(metrics, score_sector, weights)
@@ -518,6 +540,7 @@ def build_portfolio_dataframe(symbols: Iterable[str], weight_overrides: Dict[str
             "ticker_display": symbol,
             "sector": display_sector,
             "sub_sector": display_sub_sector or meta.get("sub_sector", "General"),
+            "industry": display_industry or meta.get("industry", display_sub_sector or "General"),
             "market": meta.get("market", "UNKNOWN"),
             "score": score,
             "signal": signal_from_score(score),

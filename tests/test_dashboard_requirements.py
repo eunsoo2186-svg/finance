@@ -60,6 +60,7 @@ class DashboardRequirementTests(unittest.TestCase):
         self.assertIn("ticker", watchlist.columns)
         self.assertIn("company_name_ko", watchlist.columns)
         self.assertIn("company_name_en", watchlist.columns)
+        self.assertIn("industry", watchlist.columns)
         tickers = set(watchlist["ticker"].tolist())
         self.assertTrue({"ASTS", "APP", "ALM"}.issubset(tickers))
 

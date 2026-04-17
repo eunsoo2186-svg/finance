@@ -5,10 +5,20 @@ import os
 import pandas as pd
 import plotly.express as px
 import streamlit as st
+import yfinance as yf
 
 from ai_analysis import blended_signal_score
 from news_aggregator import NewsAggregator, extract_keywords, recent_news
-from portfolio_data import DEFAULT_WEIGHTS, METRIC_SPECS, build_portfolio_dataframe, load_all_tickers, metric_basis_table
+from portfolio_data import (
+    DEFAULT_WEIGHTS,
+    METRIC_SPECS,
+    build_portfolio_dataframe,
+    get_sector,
+    get_sector_hierarchy,
+    load_all_tickers,
+    metric_basis_table,
+    stock_metrics,
+)
 from watchlist_manager import (
     load_favorites,
     load_holdings,
@@ -43,6 +53,32 @@ def _format_currency(value: object) -> str:
     except (TypeError, ValueError):
         return "-"
     return f"{amount:,.0f}"
+
+
+def _format_us_price(value: object) -> str:
+    if value is None or pd.isna(value):
+        return "-"
+    try:
+        return f"${float(value):,.2f}"
+    except (TypeError, ValueError):
+        return "-"
+
+
+def _format_kr_price(value: object) -> str:
+    if value is None or pd.isna(value):
+        return "-"
+    try:
+        return f"₩{float(value):,.0f}"
+    except (TypeError, ValueError):
+        return "-"
+
+
+def _is_kr_exchange(exchange: object) -> bool:
+    return str(exchange or "").upper() in {"KOSPI", "KOSDAQ", "KRX"}
+
+
+def _format_price_by_exchange(value: object, exchange: object) -> str:
+    return _format_kr_price(value) if _is_kr_exchange(exchange) else _format_us_price(value)
 
 
 def _display_name(row: pd.Series) -> str:
@@ -118,6 +154,114 @@ def _daily_signal(score: float) -> str:
     if score >= 40:
         return "🟠 주의"
     return "🔴 회피"
+
+
+def _validate_ticker_before_adding(ticker: str, ticker_meta: dict[str, dict[str, str]]) -> dict:
+    ticker_upper = ticker.strip().upper()
+    if not ticker_upper:
+        return {"valid": False, "message": "❌ 빈 티커는 추가할 수 없습니다.", "missing_fields": ["ticker"]}
+
+    try:
+        base_sector = get_sector(ticker_upper)
+        metrics = stock_metrics(ticker_upper, base_sector)
+        sector, sub_sector, industry = get_sector_hierarchy(ticker_upper)
+        price = metrics.get("current_price")
+    except Exception:
+        return {"valid": False, "message": f"❌ {ticker_upper}: 존재하지 않는 종목 또는 API 오류", "missing_fields": ["all"]}
+
+    meta = ticker_meta.get(ticker_upper, {})
+    required_fields = {
+        "currentPrice": price,
+        "sector": meta.get("sector") or sector,
+        "industry": meta.get("industry") or industry or sub_sector,
+    }
+    missing_fields = [k for k, v in required_fields.items() if v in (None, "", "Unknown")]
+    if missing_fields:
+        return {
+            "valid": False,
+            "message": f"❌ {ticker_upper}: 데이터 불완전 (섹터/가격 정보 없음)",
+            "missing_fields": missing_fields,
+        }
+
+    return {"valid": True, "data": required_fields, "message": f"✅ {ticker_upper}: 검증 완료", "meta": meta}
+
+
+def _get_hold_action(profit_rate: float | None, metrics: dict) -> dict[str, str]:
+    if profit_rate is None or pd.isna(profit_rate):
+        return {"action": "🟢 홀딩", "reason": "보유 정보 부족"}
+    pe = metrics.get("P/E")
+    peg = pd.to_numeric(metrics.get("PEG"), errors="coerce")
+    if profit_rate < -5:
+        return {"action": "🔴 손절 검토", "reason": f"손실률 {profit_rate:.1f}% | PE {pe if pd.notna(pe) else '-'} 점검"}
+    if profit_rate > 15:
+        return {"action": "🟡 부분 매도 검토", "reason": f"수익률 {profit_rate:.1f}% - 일부 수익 실현"}
+    if profit_rate < 0 and pd.notna(peg) and peg < 1.0:
+        return {"action": "🟢 평균매수 기회", "reason": f"PEG {peg:.2f} 저평가 구간"}
+    return {"action": "🟢 홀딩", "reason": f"수익률 {profit_rate:.1f}% - 목표가까지 보유"}
+
+
+def _get_entry_signal(row: pd.Series) -> dict[str, str]:
+    score = float(row.get("스코어") or 0)
+    peg = pd.to_numeric(row.get("PEG"), errors="coerce")
+    pe = pd.to_numeric(row.get("P/E"), errors="coerce")
+    growth = pd.to_numeric(row.get("Revenue Growth(%)"), errors="coerce")
+    if pd.notna(peg) and peg < 1.0:
+        return {"action": "🟢 강 진입", "reason": f"PEG {peg:.2f} < 1.0"}
+    if pd.notna(pe) and pd.notna(growth) and pe < 20 and growth > 12:
+        return {"action": "🟡 중 진입", "reason": f"PE {pe:.1f} / 성장률 {growth:.1f}%"}
+    if score >= 70:
+        return {"action": "🔵 관찰", "reason": f"스코어 {score:.0f}/100"}
+    return {"action": "🟠 회피", "reason": "매수 신호 부족"}
+
+
+def _generate_portfolio_insights(df: pd.DataFrame) -> list[str]:
+    insights: list[str] = []
+    if df.empty:
+        return insights
+    held = df[df["보유여부"] == "✅"]
+    if not held.empty:
+        concentration = held["섹터"].value_counts(normalize=True)
+        if not concentration.empty and concentration.iloc[0] > 0.5:
+            insights.append(f"⚠️ {concentration.index[0]} 비중 {concentration.iloc[0]*100:.0f}% → 분산 추천")
+        losing = held[pd.to_numeric(held["수익률(%)"], errors="coerce") < 0]
+        if not losing.empty:
+            insights.append(f"⚠️ 손실 종목 {len(losing)}개: {', '.join(losing['TICKER'].head(3).tolist())}")
+    sector_returns = (
+        df[pd.to_numeric(df["수익률(%)"], errors="coerce").notna()].groupby("섹터")["수익률(%)"].mean().sort_values()
+    )
+    if len(sector_returns) >= 2:
+        insights.append(f"📈 {sector_returns.index[-1]}: {sector_returns.iloc[-1]:+.1f}% | 📉 {sector_returns.index[0]}: {sector_returns.iloc[0]:+.1f}%")
+    insights.append("📊 3개월 단위 리밸런싱 점검 권장")
+    return insights
+
+
+def _resolve_history_symbol(ticker: str, exchange: str) -> str:
+    if _is_kr_exchange(exchange):
+        if ticker.endswith(".KS") or ticker.endswith(".KQ"):
+            return ticker
+        return f"{ticker}.KS" if str(exchange).upper() == "KOSPI" else f"{ticker}.KQ"
+    return ticker
+
+
+@st.cache_data(show_spinner=False, ttl=3600)
+def _portfolio_flow_heatmap_data(pairs: tuple[tuple[str, str], ...], months: int = 12) -> pd.DataFrame:
+    rows: dict[str, pd.Series] = {}
+    for ticker, exchange in pairs:
+        try:
+            hist = yf.Ticker(_resolve_history_symbol(ticker, exchange)).history(period="2y", interval="1mo")
+        except Exception:
+            continue
+        if hist is None or hist.empty or "Close" not in hist.columns:
+            continue
+        returns = pd.to_numeric(hist["Close"], errors="coerce").pct_change() * 100
+        returns = returns.dropna().tail(months)
+        if returns.empty:
+            continue
+        returns.index = returns.index.strftime("%Y-%m")
+        rows[ticker] = returns
+    if not rows:
+        return pd.DataFrame()
+    return pd.DataFrame(rows).T.sort_index(axis=1)
 
 
 def _format_news_datetime(value: object) -> str:
@@ -208,6 +352,7 @@ with st.sidebar:
         st.success("즐겨찾기를 저장했습니다.")
 
     custom = st.text_input("직접 추가 종목(쉼표 구분)", value="")
+    add_custom_clicked = st.button("종목 추가")
 
     ai_weights = {}
     with st.expander("AI 가중치 조정", expanded=False):
@@ -229,28 +374,52 @@ with st.sidebar:
 custom_symbols = [s.strip().upper() for s in custom.split(",") if s.strip()]
 symbols = selected + custom_symbols
 
-if custom_symbols:
+if add_custom_clicked and custom_symbols:
     existing_watchlist = load_watchlist()
     existing = {str(t).upper() for t in existing_watchlist["ticker"].tolist()}
     additions = []
+    validation_errors = []
     for ticker in sorted(set(custom_symbols)):
         if ticker in existing:
             continue
+        validation = _validate_ticker_before_adding(ticker, ticker_meta_map)
+        if not validation["valid"]:
+            validation_errors.append(validation)
+            continue
         meta = ticker_meta_map.get(ticker, {})
+        sector, sub_sector, industry = get_sector_hierarchy(ticker)
         additions.append(
             {
                 "ticker": ticker,
                 "company_name_ko": str(meta.get("company_name_ko", "") or ""),
                 "company_name_en": str(meta.get("company_name_en", ticker) or ticker),
                 "exchange": str(meta.get("exchange", meta.get("market", "UNKNOWN")) or "UNKNOWN"),
-                "sector": str(meta.get("sector", "MARKET") or "MARKET"),
-                "sub_sector": str(meta.get("sub_sector", "General") or "General"),
+                "sector": str(meta.get("sector", sector) or "MARKET"),
+                "sub_sector": str(meta.get("sub_sector", sub_sector) or "General"),
+                "industry": str(meta.get("industry", industry) or sub_sector or "General"),
             }
         )
     if additions:
         updated_watchlist = pd.concat([existing_watchlist, pd.DataFrame(additions)], ignore_index=True)
         save_watchlist(updated_watchlist)
         st.info(f"직접 추가한 {len(additions)}개 종목을 watchlist에 저장했습니다.")
+    for err in validation_errors:
+        st.error(err["message"])
+        st.warning(f"누락된 정보: {', '.join(err.get('missing_fields', []))}")
+
+watchlist_df = load_watchlist()
+st.subheader("📋 관리 중인 종목")
+for idx, ticker in enumerate(watchlist_df["ticker"].tolist()):
+    col1, col2, col3 = st.columns([3, 1, 1])
+    with col1:
+        st.write(ticker_label_map.get(ticker, ticker))
+    with col2:
+        if st.button("🗑️ 제거", key=f"remove_{idx}_{ticker}"):
+            updated = watchlist_df[watchlist_df["ticker"] != ticker].copy()
+            save_watchlist(updated)
+            st.rerun()
+    with col3:
+        st.write("✅" if ticker in holdings_data else "")
 
 portfolio = build_portfolio_dataframe(symbols, {"AI": ai_weights, "SPACE": space_weights, "MARKET": market_weights})
 
@@ -279,16 +448,16 @@ total_return = ((total_pnl / total_cost) * 100) if total_cost > 0 else 0.0
 
 col1, col2, col3, col4 = st.columns(4)
 with col1:
-    st.metric("총자산", f"{_format_currency(total_value)}원")
+    st.metric("총자산", _format_kr_price(total_value))
 with col2:
-    st.metric("평가손익", f"{_format_currency(total_pnl)}원")
+    st.metric("평가손익", _format_kr_price(total_pnl))
 with col3:
     st.metric("수익률", f"{total_return:+.1f}%")
 with col4:
     estimated_daily_change_pct = ESTIMATED_DAILY_CHANGE_RATE * 100
     st.metric(
         "일일 변화(추정)",
-        f"{_format_currency(total_value * ESTIMATED_DAILY_CHANGE_RATE)}원",
+        _format_kr_price(total_value * ESTIMATED_DAILY_CHANGE_RATE),
         delta=f"{estimated_daily_change_pct:+.1f}%",
     )
 
@@ -331,14 +500,25 @@ table_df = portfolio.copy()
 held_set = set(holdings_data.keys())
 table_df["보유여부"] = table_df["ticker"].apply(lambda t: "✅" if t in held_set else "❌")
 table_df["종목명(한글)"] = table_df.apply(_display_name_ko, axis=1)
-table_df["매입가"] = table_df["ticker"].apply(lambda t: float(holdings_data.get(t, {}).get("purchase_price", 0) or 0) if t in held_set else pd.NA)
+table_df["매입가_raw"] = table_df["ticker"].apply(lambda t: float(holdings_data.get(t, {}).get("purchase_price", 0) or 0) if t in held_set else pd.NA)
 table_df["보유수량"] = table_df["ticker"].apply(lambda t: float(holdings_data.get(t, {}).get("quantity", 0) or 0) if t in held_set else pd.NA)
-table_df["현재가"] = pd.to_numeric(table_df["current_price"], errors="coerce")
-table_df["평가손익"] = (table_df["현재가"] - table_df["매입가"]) * table_df["보유수량"]
-table_df["수익률(%)"] = ((table_df["현재가"] - table_df["매입가"]) / table_df["매입가"].replace(0, pd.NA)) * 100
+table_df["현재가_raw"] = pd.to_numeric(table_df["current_price"], errors="coerce")
+table_df["평가손익_raw"] = (table_df["현재가_raw"] - table_df["매입가_raw"]) * table_df["보유수량"]
+table_df["수익률(%)"] = ((table_df["현재가_raw"] - table_df["매입가_raw"]) / table_df["매입가_raw"].replace(0, pd.NA)) * 100
 table_df["메모"] = table_df["ticker"].apply(lambda t: str(notes_data.get(t, "")))
 table_df["신호"] = table_df["score"].apply(lambda s: _daily_signal(float(s)))
-table_df.rename(columns={"ticker": "TICKER", "score": "스코어", "sector": "섹터", "sub_sector": "소섹터"}, inplace=True)
+table_df.rename(columns={"ticker": "TICKER", "score": "스코어", "sector": "섹터", "sub_sector": "소섹터", "industry": "산업", "market": "거래소"}, inplace=True)
+table_df["섹터 계층"] = table_df["섹터"].fillna("Unknown") + " > " + table_df["소섹터"].fillna("Unknown") + " > " + table_df["산업"].fillna(table_df["소섹터"])
+table_df["통화코드"] = table_df.apply(
+    lambda row: holdings_data.get(row["TICKER"], {}).get("currency", "KRW" if _is_kr_exchange(row.get("거래소")) else "USD"),
+    axis=1,
+)
+table_df["매입가"] = table_df.apply(lambda row: _format_kr_price(row["매입가_raw"]) if row["통화코드"] == "KRW" else _format_us_price(row["매입가_raw"]), axis=1)
+table_df["현재가"] = table_df.apply(lambda row: _format_price_by_exchange(row["현재가_raw"], row["거래소"]), axis=1)
+table_df["평가손익"] = table_df.apply(
+    lambda row: _format_kr_price(row["평가손익_raw"]) if row["통화코드"] == "KRW" else _format_us_price(row["평가손익_raw"]),
+    axis=1,
+)
 
 metric_columns = {
     "pe_ratio": "P/E",
@@ -380,12 +560,25 @@ if sort_key == "신호":
 elif sort_key in table_df.columns:
     table_df = table_df.sort_values(sort_key, ascending=False, na_position="last")
 
+table_df["액션"] = table_df.apply(
+    lambda row: _get_hold_action(row.get("수익률(%)"), row).get("action")
+    if row.get("보유여부") == "✅"
+    else _get_entry_signal(row).get("action"),
+    axis=1,
+)
+table_df["액션 근거"] = table_df.apply(
+    lambda row: _get_hold_action(row.get("수익률(%)"), row).get("reason")
+    if row.get("보유여부") == "✅"
+    else _get_entry_signal(row).get("reason"),
+    axis=1,
+)
+
 unified_columns = [
     "보유여부",
     "종목명(한글)",
     "TICKER",
-    "섹터",
-    "소섹터",
+    "거래소",
+    "섹터 계층",
     "매입가",
     "보유수량",
     "현재가",
@@ -406,12 +599,14 @@ unified_columns = [
     "Backlog Proxy",
     "Gov Cycle",
     "신호",
+    "액션",
+    "액션 근거",
 ]
 for col in unified_columns:
     if col not in table_df.columns:
         table_df[col] = pd.NA
 
-non_numeric_unified_columns = {"보유여부", "종목명(한글)", "TICKER", "섹터", "소섹터", "메모", "신호"}
+non_numeric_unified_columns = {"보유여부", "종목명(한글)", "TICKER", "거래소", "섹터 계층", "매입가", "현재가", "평가손익", "메모", "신호", "액션", "액션 근거"}
 column_config = {
     "P/E": st.column_config.NumberColumn(help="주가수익비율"),
     "PEG": st.column_config.NumberColumn(help="P/E 대비 성장률 보정 지표"),
@@ -440,10 +635,7 @@ try:
         .applymap(lambda v: _metric_value_style(v, "Dividend Yield(%)"), subset=["Dividend Yield(%)"])
         .format(
             {
-                "매입가": _format_currency,
                 "보유수량": "{:.2f}",
-                "현재가": _format_currency,
-                "평가손익": _format_currency,
                 "수익률(%)": lambda v: "-" if pd.isna(v) else f"{float(v):+.1f}%",
                 "스코어": "{:.2f}",
                 "P/E": "{:.2f}",
@@ -467,9 +659,7 @@ except AttributeError:
     fallback_df = table_df[unified_columns].copy()
     for c in fallback_df.columns:
         if c not in non_numeric_unified_columns:
-            if c in {"매입가", "현재가", "평가손익"}:
-                fallback_df[c] = fallback_df[c].apply(_format_currency)
-            elif c in {"수익률(%)"}:
+            if c in {"수익률(%)"}:
                 fallback_df[c] = fallback_df[c].apply(lambda v: "-" if pd.isna(v) else f"{float(v):+.1f}%")
             elif c in {"Revenue Growth(%)", "R&D Ratio(%)", "Operating Margin(%)", "Debt Ratio(%)", "Dividend Yield(%)"}:
                 fallback_df[c] = fallback_df[c].apply(lambda v: "-" if pd.isna(v) else f"{float(v):.1f}%")
@@ -495,6 +685,17 @@ daily_checks = [
 for label, checked in daily_checks:
     st.markdown(f"{'✅' if checked else '☑️'} {label}")
 
+kr_missing = table_df[
+    table_df["거래소"].apply(_is_kr_exchange)
+    & (table_df["P/E"].isna() | table_df["PEG"].isna())
+]["TICKER"].tolist()
+if kr_missing:
+    st.info(f"⚠️ {', '.join(kr_missing[:5])}: 일부 국내 종목 재무지표가 부족해 '-'로 표시됩니다.")
+
+st.subheader("💡 INSIGHTS")
+for idx, insight in enumerate(_generate_portfolio_insights(table_df), start=1):
+    st.markdown(f"{idx}️⃣ {insight}")
+
 with st.expander("Metric Definitions", expanded=False):
     for metric_name, metric_desc in METRIC_HELP.items():
         st.markdown(f"- **{metric_name}**: {metric_desc}")
@@ -503,6 +704,21 @@ with st.expander("Metric Definitions", expanded=False):
         st.dataframe(metric_basis_table(sector), use_container_width=True, hide_index=True)
 
 heatmap_cols = [c for c in portfolio.columns if c.endswith("_normalized")]
+st.subheader("📈 포트폴리오 전체 흐름 히트맵")
+flow_pairs = tuple((str(row["ticker"]), str(row.get("market", "UNKNOWN"))) for _, row in portfolio[["ticker", "market"]].iterrows())
+flow_heatmap = _portfolio_flow_heatmap_data(flow_pairs, months=12)
+if flow_heatmap.empty:
+    st.info("포트폴리오 흐름 히트맵 데이터가 부족합니다.")
+else:
+    fig_flow = px.imshow(
+        flow_heatmap,
+        labels=dict(x="월", y="종목", color="수익률(%)"),
+        color_continuous_scale="RdYlGn",
+        aspect="auto",
+        title="Portfolio Monthly Return Heatmap",
+    )
+    st.plotly_chart(fig_flow, use_container_width=True)
+
 if heatmap_cols:
     heatmap_input = portfolio.set_index("ticker")[heatmap_cols].apply(pd.to_numeric, errors="coerce")
     heatmap_input = heatmap_input.dropna(axis=1, how="all").dropna(axis=0, how="all")

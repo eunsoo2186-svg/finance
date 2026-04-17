@@ -3,8 +3,10 @@ from __future__ import annotations
 import logging
 import os
 import re
+import html
 from collections import Counter
 from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 from typing import Dict, List, Union
 
 import requests
@@ -31,6 +33,12 @@ SECTOR_NEWS_SYMBOLS = {
 MAX_SECTOR_NEWS_SYMBOLS = 3
 # Keep request latency bounded for interactive dashboard refreshes.
 FINNHUB_REQUEST_TIMEOUT = 8
+GOOGLE_NEWS_RSS_URL = "https://news.google.com/rss/search"
+RSS_ITEM_PATTERN = re.compile(r"<item>(.*?)</item>", re.DOTALL | re.IGNORECASE)
+RSS_TAG_PATTERN_TEMPLATE = r"<{tag}>(.*?)</{tag}>"
+RSS_TITLE_PATTERN = re.compile(RSS_TAG_PATTERN_TEMPLATE.format(tag="title"), re.DOTALL | re.IGNORECASE)
+RSS_LINK_PATTERN = re.compile(RSS_TAG_PATTERN_TEMPLATE.format(tag="link"), re.DOTALL | re.IGNORECASE)
+RSS_PUBDATE_PATTERN = re.compile(RSS_TAG_PATTERN_TEMPLATE.format(tag="pubDate"), re.DOTALL | re.IGNORECASE)
 
 
 def _sentiment_label(headline: str, summary: str) -> str:
@@ -74,9 +82,58 @@ class NewsAggregator:
             LOGGER.warning("Failed to fetch news for %s: %s", symbol, exc)
             return []
 
+    def _fetch_google_news(self, symbol: str, days: int) -> List[Dict]:
+        query = f"{symbol} 주식" if symbol.isdigit() else symbol.upper()
+        try:
+            response = requests.get(
+                GOOGLE_NEWS_RSS_URL,
+                params={"q": query, "hl": "ko", "gl": "KR", "ceid": "KR:ko"},
+                timeout=FINNHUB_REQUEST_TIMEOUT,
+            )
+            response.raise_for_status()
+            raw_rss = response.text
+        except Exception as exc:
+            LOGGER.warning("Failed to fetch Google RSS for %s: %s", symbol, exc)
+            return []
+
+        cutoff = datetime.now(timezone.utc) - timedelta(days=max(1, days))
+        rows: List[Dict] = []
+        for item_block in RSS_ITEM_PATTERN.findall(raw_rss):
+            title_match = RSS_TITLE_PATTERN.search(item_block)
+            link_match = RSS_LINK_PATTERN.search(item_block)
+            date_match = RSS_PUBDATE_PATTERN.search(item_block)
+            title = html.unescape((title_match.group(1) if title_match else "")).strip()
+            link = html.unescape((link_match.group(1) if link_match else "")).strip()
+            pub_date_raw = html.unescape((date_match.group(1) if date_match else "")).strip()
+            if not title or not link:
+                continue
+            try:
+                dt = parsedate_to_datetime(pub_date_raw)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                dt = dt.astimezone(timezone.utc)
+            except Exception:
+                dt = datetime.now(timezone.utc)
+            if dt < cutoff:
+                continue
+            rows.append(
+                {
+                    "id": link,
+                    "datetime": int(dt.timestamp()),
+                    "source": "Google News",
+                    "headline": title,
+                    "summary": "",
+                    "url": link,
+                }
+            )
+        return rows
+
     def get_stock_news(self, symbol: str, days: int = 7) -> List[Dict]:
         """Get raw Finnhub news for a specific stock."""
-        return self._fetch_company_news(symbol, days)
+        rows = self._fetch_company_news(symbol, days)
+        if rows:
+            return rows
+        return self._fetch_google_news(symbol, days)
 
     def get_sector_news(self, sector: str, days: int = 7) -> List[Dict]:
         """Get aggregated sector news using representative symbols."""
