@@ -7,7 +7,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from json import JSONDecodeError
 from pathlib import Path
-from typing import Dict, Iterable, List
+from typing import Dict, Iterable, List, Optional
 
 import pandas as pd
 import requests
@@ -32,6 +32,8 @@ KRX_DESC_CACHE_URL_TEMPLATE = (
 )
 KRX_DESC_CACHE_LOOKBACK_DAYS = 120
 DEFAULT_UNKNOWN = "Unknown"
+_KRX_DESC_FRAME_CACHE: Dict[str, pd.DataFrame] = {}
+_KRX_DESC_LAST_GOOD_DATE: Optional[str] = None
 
 
 def _non_negative_float(raw: str) -> float:
@@ -154,16 +156,35 @@ def _normalize_krx_market(raw: object) -> str:
     return value
 
 
+def _load_krx_desc_frame(target_date: str) -> pd.DataFrame:
+    if target_date in _KRX_DESC_FRAME_CACHE:
+        return _KRX_DESC_FRAME_CACHE[target_date]
+
+    url = KRX_DESC_CACHE_URL_TEMPLATE.format(date=target_date)
+    try:
+        frame = pd.read_csv(url, dtype={"Code": str})
+    except Exception as exc:
+        LOGGER.debug("Failed to read KRX fallback cache from %s: %s", url, exc)
+        frame = pd.DataFrame()
+    _KRX_DESC_FRAME_CACHE[target_date] = frame
+    return frame
+
+
 def _load_krx_rows_from_cache(market: str) -> List[Dict[str, str]]:
+    global _KRX_DESC_LAST_GOOD_DATE
+
     normalized_market = market.upper().strip()
     base_date = datetime.now(timezone.utc)
-    for offset in range(KRX_DESC_CACHE_LOOKBACK_DAYS + 1):
-        target_date = (base_date - timedelta(days=offset)).strftime("%Y-%m-%d")
-        url = KRX_DESC_CACHE_URL_TEMPLATE.format(date=target_date)
-        try:
-            frame = pd.read_csv(url, dtype={"Code": str})
-        except Exception:
-            continue
+    date_candidates: List[str] = []
+    if _KRX_DESC_LAST_GOOD_DATE:
+        date_candidates.append(_KRX_DESC_LAST_GOOD_DATE)
+    date_candidates.extend(
+        (base_date - timedelta(days=offset)).strftime("%Y-%m-%d")
+        for offset in range(KRX_DESC_CACHE_LOOKBACK_DAYS + 1)
+    )
+
+    for target_date in date_candidates:
+        frame = _load_krx_desc_frame(target_date)
         if frame.empty:
             continue
 
@@ -194,7 +215,8 @@ def _load_krx_rows_from_cache(market: str) -> List[Dict[str, str]]:
             )
 
         if out:
-            LOGGER.info("Loaded %s fallback rows from %s", len(out), url)
+            _KRX_DESC_LAST_GOOD_DATE = target_date
+            LOGGER.info("Loaded %s fallback rows from %s", len(out), KRX_DESC_CACHE_URL_TEMPLATE.format(date=target_date))
             return out
 
     LOGGER.warning("Failed to load fallback KRX cache for %s", normalized_market)
