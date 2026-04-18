@@ -1,22 +1,26 @@
 from __future__ import annotations
 
 import os
+from typing import Any
 
 import pandas as pd
 import plotly.express as px
 import streamlit as st
 import yfinance as yf
 
-from ai_analysis import blended_signal_score
+from ai_analysis import blended_signal_score, entry_signal_detail, exit_signal_detail
 from news_aggregator import NewsAggregator, extract_keywords, recent_news
 from portfolio_data import (
     DEFAULT_WEIGHTS,
     METRIC_SPECS,
     build_portfolio_dataframe,
+    compute_stop_loss,
+    compute_target_price,
     get_sector,
     get_sector_hierarchy,
     load_all_tickers,
     metric_basis_table,
+    suggest_position_size,
     stock_metrics,
 )
 from watchlist_manager import (
@@ -205,13 +209,44 @@ def _get_entry_signal(row: pd.Series) -> dict[str, str]:
     peg = pd.to_numeric(row.get("PEG"), errors="coerce")
     pe = pd.to_numeric(row.get("P/E"), errors="coerce")
     growth = pd.to_numeric(row.get("Revenue Growth(%)"), errors="coerce")
-    if pd.notna(peg) and peg < 1.0:
-        return {"action": "🟢 강 진입", "reason": f"PEG {peg:.2f} < 1.0"}
-    if pd.notna(pe) and pd.notna(growth) and pe < 20 and growth > 12:
+    exchange = str(row.get("거래소") or "")
+    is_kr = _is_kr_exchange(exchange)
+    pe_cutoff = 30 if is_kr else 20
+    peg_cutoff = 2.0 if is_kr else 1.0
+    if pd.notna(peg) and peg <= peg_cutoff:
+        return {"action": "🟢 강 진입", "reason": f"PEG {peg:.2f} ≤ {peg_cutoff:.1f}"}
+    if pd.notna(pe) and pd.notna(growth) and pe < pe_cutoff and growth > 12:
         return {"action": "🟡 중 진입", "reason": f"PE {pe:.1f} / 성장률 {growth:.1f}%"}
     if score >= 70:
         return {"action": "🔵 관찰", "reason": f"스코어 {score:.0f}/100"}
     return {"action": "🟠 회피", "reason": "매수 신호 부족"}
+
+
+def _news_sentiment_ratio(rows: list[dict[str, Any]]) -> float:
+    if not rows:
+        return 0.5
+    positive = sum(1 for row in rows if str(row.get("sentiment", "")).lower() == "positive")
+    return positive / len(rows)
+
+
+def _safe_stop_loss(ticker: str, current_price: object) -> float | None:
+    try:
+        price = float(current_price)
+        if price <= 0:
+            return None
+        return compute_stop_loss(ticker, price)
+    except Exception:
+        return None
+
+
+def _safe_target_price(current_price: object, score: object) -> float | None:
+    try:
+        price = float(current_price)
+        if price <= 0:
+            return None
+        return compute_target_price(price, float(score))
+    except Exception:
+        return None
 
 
 def _generate_portfolio_insights(df: pd.DataFrame) -> list[str]:
@@ -290,9 +325,8 @@ METRIC_HELP = {
 }
 # Cap API calls per refresh while still surfacing a representative notable-news sample.
 NEWS_SCAN_LIMIT = 20
-# Conservative placeholder for daily drift when no intraday PnL feed is available (~0.2%).
-ESTIMATED_DAILY_CHANGE_RATE = 0.002
 news_agg = NewsAggregator(os.getenv("FINNHUB_API_KEY", ""))
+MAX_DETAILED_ANALYSIS_ROWS = 12
 
 
 def _average_return_for_held(frame: pd.DataFrame, holdings_payload: dict) -> str:
@@ -454,10 +488,21 @@ with col2:
 with col3:
     st.metric("수익률", f"{total_return:+.1f}%")
 with col4:
-    estimated_daily_change_pct = ESTIMATED_DAILY_CHANGE_RATE * 100
+    held_daily = portfolio[portfolio["ticker"].isin(set(holdings_data.keys()))].copy()
+    if not held_daily.empty:
+        held_daily["quantity"] = held_daily["ticker"].apply(lambda t: float(holdings_data.get(t, {}).get("quantity", 0) or 0))
+        held_daily["value"] = pd.to_numeric(held_daily["current_price"], errors="coerce").fillna(0) * held_daily["quantity"]
+        held_daily["daily_change_pct"] = pd.to_numeric(held_daily.get("daily_change_pct"), errors="coerce").fillna(0)
+        total_daily_value = float(held_daily["value"].sum())
+        weighted_daily_change_rate = (
+            float((held_daily["value"] * held_daily["daily_change_pct"]).sum()) / total_daily_value if total_daily_value > 0 else 0.0
+        )
+    else:
+        weighted_daily_change_rate = 0.0
+    estimated_daily_change_pct = weighted_daily_change_rate * 100
     st.metric(
-        "일일 변화(추정)",
-        _format_kr_price(total_value * ESTIMATED_DAILY_CHANGE_RATE),
+        "일일 변화(실시간)",
+        _format_kr_price(total_value * weighted_daily_change_rate),
         delta=f"{estimated_daily_change_pct:+.1f}%",
     )
 
@@ -507,6 +552,58 @@ table_df["평가손익_raw"] = (table_df["현재가_raw"] - table_df["매입가_
 table_df["수익률(%)"] = ((table_df["현재가_raw"] - table_df["매입가_raw"]) / table_df["매입가_raw"].replace(0, pd.NA)) * 100
 table_df["메모"] = table_df["ticker"].apply(lambda t: str(notes_data.get(t, "")))
 table_df["신호"] = table_df["score"].apply(lambda s: _daily_signal(float(s)))
+
+
+def _row_metrics_payload(row: pd.Series) -> dict:
+    raw_volume_ratio = pd.to_numeric(row.get("volume_ratio"), errors="coerce")
+    raw_above_20ma = row.get("price_above_20ma")
+    raw_above_200ma = row.get("price_above_200ma")
+    return {
+        "pe_ratio": pd.to_numeric(row.get("pe_ratio"), errors="coerce"),
+        "peg_ratio": pd.to_numeric(row.get("peg_ratio"), errors="coerce"),
+        "revenue_growth_yoy": pd.to_numeric(row.get("revenue_growth_yoy"), errors="coerce"),
+        "asset_turnover": pd.to_numeric(row.get("asset_turnover"), errors="coerce"),
+        "debt_ratio": pd.to_numeric(row.get("debt_ratio"), errors="coerce"),
+        "dividend_yield": pd.to_numeric(row.get("dividend_yield"), errors="coerce"),
+        "rsi": pd.to_numeric(row.get("rsi"), errors="coerce"),
+        "tech_cycle_proxy": pd.to_numeric(row.get("tech_cycle"), errors="coerce"),
+        "volume_ratio": None if pd.isna(raw_volume_ratio) else float(raw_volume_ratio),
+        "price_above_20ma": raw_above_20ma if isinstance(raw_above_20ma, bool) else None,
+        "price_above_200ma": raw_above_200ma if isinstance(raw_above_200ma, bool) else None,
+        "eps_growth_yoy": pd.to_numeric(row.get("revenue_growth_yoy"), errors="coerce"),
+    }
+
+
+table_df["kelly_info"] = table_df["score"].apply(lambda s: suggest_position_size(float(s), total_value))
+table_df["Kelly 비중(%)"] = table_df["kelly_info"].apply(lambda d: float(d.get("kelly_fraction", 0.0)) * 100 if isinstance(d, dict) else 0.0)
+table_df["추천액_raw"] = table_df["kelly_info"].apply(lambda d: float(d.get("suggested_amount", 0.0)) if isinstance(d, dict) else 0.0)
+table_df["추천액"] = table_df["추천액_raw"].apply(_format_kr_price)
+table_df["손절가_raw"] = table_df.apply(
+    lambda row: _safe_stop_loss(str(row.get("ticker")), row.get("current_price")),
+    axis=1,
+)
+table_df["목표가_raw"] = table_df.apply(
+    lambda row: _safe_target_price(row.get("current_price"), row.get("score")),
+    axis=1,
+)
+table_df["entry_detail"] = table_df.apply(
+    lambda row: entry_signal_detail(
+        str(row.get("ticker")),
+        _row_metrics_payload(row),
+        float(row.get("score") or 0),
+        news_count=0,
+        sentiment_ratio=0.5,
+    ),
+    axis=1,
+)
+table_df["exit_detail"] = table_df.apply(
+    lambda row: exit_signal_detail(
+        str(row.get("ticker")),
+        _row_metrics_payload(row),
+        None if pd.isna(row.get("수익률(%)")) else float(row.get("수익률(%)")),
+    ),
+    axis=1,
+)
 table_df.rename(columns={"ticker": "TICKER", "score": "스코어", "sector": "섹터", "sub_sector": "소섹터", "industry": "산업", "market": "거래소"}, inplace=True)
 table_df["섹터 계층"] = table_df["섹터"].fillna("Unknown") + " > " + table_df["소섹터"].fillna("Unknown") + " > " + table_df["산업"].fillna(table_df["소섹터"])
 table_df["통화코드"] = table_df.apply(
@@ -519,6 +616,8 @@ table_df["평가손익"] = table_df.apply(
     lambda row: _format_kr_price(row["평가손익_raw"]) if row["통화코드"] == "KRW" else _format_us_price(row["평가손익_raw"]),
     axis=1,
 )
+table_df["손절가"] = table_df.apply(lambda row: _format_price_by_exchange(row["손절가_raw"], row["거래소"]), axis=1)
+table_df["목표가"] = table_df.apply(lambda row: _format_price_by_exchange(row["목표가_raw"], row["거래소"]), axis=1)
 
 metric_columns = {
     "pe_ratio": "P/E",
@@ -584,6 +683,10 @@ unified_columns = [
     "현재가",
     "평가손익",
     "수익률(%)",
+    "Kelly 비중(%)",
+    "추천액",
+    "손절가",
+    "목표가",
     "메모",
     "스코어",
     "P/E",
@@ -606,7 +709,23 @@ for col in unified_columns:
     if col not in table_df.columns:
         table_df[col] = pd.NA
 
-non_numeric_unified_columns = {"보유여부", "종목명(한글)", "TICKER", "거래소", "섹터 계층", "매입가", "현재가", "평가손익", "메모", "신호", "액션", "액션 근거"}
+non_numeric_unified_columns = {
+    "보유여부",
+    "종목명(한글)",
+    "TICKER",
+    "거래소",
+    "섹터 계층",
+    "매입가",
+    "현재가",
+    "평가손익",
+    "추천액",
+    "손절가",
+    "목표가",
+    "메모",
+    "신호",
+    "액션",
+    "액션 근거",
+}
 column_config = {
     "P/E": st.column_config.NumberColumn(help="주가수익비율"),
     "PEG": st.column_config.NumberColumn(help="P/E 대비 성장률 보정 지표"),
@@ -637,6 +756,7 @@ try:
             {
                 "보유수량": "{:.2f}",
                 "수익률(%)": lambda v: "-" if pd.isna(v) else f"{float(v):+.1f}%",
+                "Kelly 비중(%)": lambda v: "-" if pd.isna(v) else f"{float(v):.2f}%",
                 "스코어": "{:.2f}",
                 "P/E": "{:.2f}",
                 "PEG": "{:.2f}",
@@ -666,6 +786,28 @@ except AttributeError:
             else:
                 fallback_df[c] = fallback_df[c].apply(_format_number)
     st.dataframe(fallback_df.fillna("-"), use_container_width=True, hide_index=True)
+
+st.subheader("🔎 Level별 상세 분석")
+for _, row in table_df.head(MAX_DETAILED_ANALYSIS_ROWS).iterrows():
+    ticker = str(row.get("TICKER", ""))
+    action = str(row.get("액션", ""))
+    with st.expander(f"{ticker} | {action} | Score {float(row.get('스코어') or 0):.1f}", expanded=False):
+        entry_detail = row.get("entry_detail", {})
+        exit_detail = row.get("exit_detail", {})
+        if isinstance(entry_detail, dict):
+            st.markdown("**[매수 신호]**")
+            for level in entry_detail.get("levels", []):
+                mark = "✅" if level.get("pass") else "❌"
+                st.markdown(f"- Level {level.get('level')}: {mark} {level.get('name')} | {level.get('detail')}")
+        if isinstance(exit_detail, dict):
+            st.markdown("**[손절 검토]**")
+            for level in exit_detail.get("levels", []):
+                mark = "✅" if level.get("pass") else "⚠️"
+                st.markdown(f"- Level {level.get('level')}: {mark} {level.get('name')} | {level.get('detail')}")
+            st.caption(f"최종 위험도: {exit_detail.get('risk_score', 0)}/5")
+        st.markdown(
+            f"Kelly {float(row.get('Kelly 비중(%)') or 0):.2f}% | 추천액 {row.get('추천액', '-')} | 손절가 {row.get('손절가', '-')} | 목표가 {row.get('목표가', '-')}"
+        )
 
 selected_ticker_for_note = st.selectbox("메모 수정 종목", portfolio["ticker"].tolist(), format_func=lambda t: ticker_label_map.get(t, t))
 note_value = st.text_input("메모", value=str(notes_data.get(selected_ticker_for_note, "")))
@@ -795,11 +937,13 @@ if news_rows:
     score_series = portfolio.loc[portfolio["ticker"] == news_ticker, "score"]
     if not score_series.empty:
         base_score = float(score_series.iloc[0])
-        blended = blended_signal_score(base_score, len(news_rows))
+        sentiment_ratio = _news_sentiment_ratio(news_rows)
+        blended = blended_signal_score(base_score, len(news_rows), sentiment_ratio=sentiment_ratio)
         signal_df = pd.DataFrame(
             [
                 {"Metric": "Financial Score", "Score": round(base_score, 2)},
                 {"Metric": "Blended AI Score", "Score": round(blended, 2)},
+                {"Metric": "Positive Sentiment Ratio", "Score": round(sentiment_ratio * 100, 2)},
             ]
         )
         fig_signal = px.bar(signal_df, x="Metric", y="Score", range_y=[0, 100], title="AI 판단 점수")
